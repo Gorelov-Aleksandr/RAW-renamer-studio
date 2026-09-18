@@ -8,6 +8,12 @@ __pycache__/
 build/
 binaries/
 *.spec.bak
+.build-venv/
+src-python/dist/
+src-python/build/
+
+# Tauri (генерируется при сборке)
+/src-tauri/gen/schemas/
 
 # Runtime (sidecar)
 .data/

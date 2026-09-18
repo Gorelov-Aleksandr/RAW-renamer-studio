@@ -31,26 +31,8 @@ echo "node    $(node -v)"
 echo "python3 $(python3 -V 2>&1)"
 echo "cargo   $(cargo --version)"
 
-say "2/4 Python sidecar → PyInstaller (onefile)"
-python3 -m venv .build-venv
-./.build-venv/bin/pip install --quiet --upgrade pip
-./.build-venv/bin/pip install --quiet -r src-python/requirements.txt pyinstaller
-./.build-venv/bin/pyinstaller --clean --noconfirm \
-    --distpath src-python/dist --workpath src-python/build \
-    src-python/sidecar.spec
-[ -f src-python/dist/raw-renamer-sidecar ] || fail "sidecar не собран: src-python/dist/raw-renamer-sidecar"
-echo "OK: src-python/dist/raw-renamer-sidecar ($(du -h src-python/dist/raw-renamer-sidecar | cut -f1))"
-
-say "3/4 Бинарник в bundle под target-triple"
-TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
-case "$TRIPLE" in
-  aarch64-apple-darwin) DST=raw-renamer-sidecar-aarch64-apple-darwin ;;
-  x86_64-apple-darwin)  DST=raw-renamer-sidecar-x86_64-apple-darwin ;;
-  *) fail "неожиданный host: $TRIPLE (поддерживаются x86_64/aarch64-apple-darwin)" ;;
-esac
-mkdir -p src-tauri/binaries
-cp src-python/dist/raw-renamer-sidecar "src-tauri/binaries/$DST"
-echo "OK: src-tauri/binaries/$DST"
+say "2/4 Python sidecar → PyInstaller (onefile) + binaries/"
+bash scripts/build-sidecar.sh
 
 say "4/4 Tauri build (Rust + веб-фронтенд + .dmg)"
 npm install --no-audit --no-fund

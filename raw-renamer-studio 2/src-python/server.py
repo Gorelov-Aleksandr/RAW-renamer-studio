@@ -877,12 +877,24 @@ def health():
 
 
 # --------------------------------------------------------------------------- main
+def _say(msg: str) -> None:
+    """Печать в stdout (Rust читает SIDECAR_READY из этого потока).
+
+    BUG-013: при выходе из приложения Rust закрывает pipe — без защиты
+    print() в фоновых потоках падал с BrokenPipeError (traceback в stderr).
+    """
+    try:
+        print(msg, flush=True)
+    except (BrokenPipeError, OSError):
+        return
+
+
 def _watchdog(timeout: float) -> None:
     while True:
         time.sleep(1.0)
         if time.time() - state.last_beat > timeout:
-            print('SIDECAR: нет heartbeat дольше '
-                  f'{timeout:.0f} c — exit(0)', flush=True)
+            _say('SIDECAR: нет heartbeat дольше '
+                 f'{timeout:.0f} c — exit(0)')
             os._exit(0)
 
 
@@ -996,8 +1008,8 @@ def main() -> None:
                 pf.write_text(str(port))
             except OSError as e:
                 print(f'SIDECAR: не удалось записать port-file: {e}', file=sys.stderr, flush=True)
-        print(json.dumps({'event': 'SIDECAR_READY', 'port': port, 'pid': os.getpid()},
-                         ensure_ascii=False), flush=True)
+        _say(json.dumps({'event': 'SIDECAR_READY', 'port': port, 'pid': os.getpid()},
+                        ensure_ascii=False))
         log('sidecar_ready', port=port)
 
     threading.Thread(target=_announce, daemon=True).start()

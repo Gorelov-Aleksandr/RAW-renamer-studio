@@ -1,12 +1,25 @@
-# RAW Renamer Studio — Python Sidecar (FastAPI)
-fastapi>=0.115
-uvicorn[standard]>=0.30
-python-multipart>=0.0.9
-httpx>=0.27
-openpyxl>=3.1
-Pillow>=10.3
-numpy>=1.26
-opencv-python-headless>=4.9
-zxing-cpp>=2.2
-# Опциональный 3-й контур декодирования (нужна системная libzbar):
-# pyzbar>=0.1.9
+# RAW Renamer Studio — Python sidecar
+# Установка:  pip install -r requirements.txt
+# (в build-macos.sh / build-sidecar.sh ставится в отдельный venv .build-venv)
+
+# HTTP API
+fastapi
+uvicorn[standard]
+python-multipart        # UploadFile/Form в FastAPI
+
+# Заявки (xlsx/csv)
+openpyxl
+
+# НЕТ-проверка IMEI / внешние запросы
+httpx
+
+# Обработка превью/тинейбов RAW
+Pillow
+numpy
+
+# Распознавание баркодов (опциональные движки — app работает и без них,
+# но cv2+zxing нужны для полноценного сканера):
+opencv-python-headless
+zxing-cpp
+# pyzbar — третий движок, требует системную libzbar (brew install zbar).
+# Установите вручную, если нужен:  pip install pyzbar
