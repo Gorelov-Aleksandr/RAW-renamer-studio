@@ -28,6 +28,11 @@ use tauri::{Emitter, Manager, Runtime, State};
 const MAX_RESTARTS: u32 = 3;
 const RESTART_DELAY_MS: u64 = 1500;
 const REAP_INTERVAL_MS: u64 = 500;
+
+/// ЗАМ-001/004: последняя ошибка супервизора — фронтенд может СПРОСИТЬ её
+/// командой `sidecar_error` (страховка от гонки: событие sidecar://error
+/// могло улететь до подписки вебвью).
+static LAST_SUPERVISOR_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// v3.3 (D2): сколько секунд стабильной работы обнуляет счётчик авто-рестартов.
 /// Кратковременный сбой (App Nap, спящий Mac) больше не «сжигает» все попытки.
 const STABLE_RESET: std::time::Duration = std::time::Duration::from_secs(300);
@@ -87,11 +92,17 @@ pub fn sidecar_status(state: State<SidecarState>) -> u64 {
     state.port.load(Ordering::Relaxed)
 }
 
+#[tauri::command]
+pub fn sidecar_error() -> Option<String> {
+    LAST_SUPERVISOR_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 fn log(msg: &str) {
     eprintln!("{msg}");
 }
 
 fn emit_err<R: Runtime>(app: &tauri::AppHandle<R>, message: &str) {
+    *LAST_SUPERVISOR_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.to_string());
     log(&format!("[sidecar] ОШИБКА: {message}"));
     let _ = app.emit(
         "sidecar://error",
@@ -192,13 +203,13 @@ fn supervisor_loop<R: Runtime>(
         let (cmd_path, args) = match build_command(&app) {
             Ok(v) => v,
             Err(message) => {
+                // ЗАМ-004: бинарника нет — ретраи бессмысленны (файл не
+                // появится, пока приложение работает: нужен npm run build:sidecar).
+                // Раньше было 3 бессмысленных ретрая по 1.5 с — выходим сразу
+                // с понятной ошибкой.
                 emit_err(&app, &message);
-                if restarts >= MAX_RESTARTS {
-                    break;
-                }
-                restarts += 1;
-                std::thread::sleep(Duration::from_millis(RESTART_DELAY_MS));
-                continue;
+                log("[sidecar] бинарник sidecar не найден — супервизор завершает работу без ретраев");
+                break;
             }
         };
         log(&format!("[sidecar] запуск: {cmd_path}"));

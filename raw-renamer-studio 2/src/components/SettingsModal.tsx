@@ -13,6 +13,7 @@ export default function SettingsModal() {
   const open = useSession((s) => s.modals.settings);
   const closeModals = useSession((s) => s.closeModals);
   const info = useSession((s) => s.info);
+  const engineState = useSession((s) => s.engineState);
   const session = useSession((s) => s.session);
   const toast = useSession((s) => s.toast);
   const [tab, setTab] = useState<'basic' | 'pro'>('basic');
@@ -223,8 +224,8 @@ export default function SettingsModal() {
                 <div className={row}>
                   <span className={label}>Статус</span>
                   <span className="text-[12px] font-semibold flex items-center gap-1.5">
-                    <span className={info ? 'w-2 h-2 rounded-full bg-ok inline-block' : 'w-2 h-2 rounded-full bg-danger inline-block'} />
-                    {info ? 'работает' : 'не отвечает'}
+                    <span className={info ? 'w-2 h-2 rounded-full bg-ok inline-block' : engineState === 'starting' ? 'w-2 h-2 rounded-full bg-tx-3 inline-block' : 'w-2 h-2 rounded-full bg-danger inline-block'} />
+                    {info ? 'работает' : engineState === 'starting' ? 'запускается…' : 'не отвечает'}
                   </span>
                 </div>
                 <div className={row}>

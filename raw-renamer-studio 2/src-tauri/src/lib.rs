@@ -64,7 +64,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sidecar::sidecar_url,
-            sidecar::sidecar_status
+            sidecar::sidecar_status,
+            sidecar::sidecar_error
         ])
         .build(tauri::generate_context!())
         .expect("error while running RAW Renamer Studio");

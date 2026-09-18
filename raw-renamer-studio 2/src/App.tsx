@@ -64,6 +64,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
 export default function App() {
   const init = useSession((s) => s.init);
   const online = useSession((s) => s.online);
+  const engineState = useSession((s) => s.engineState);
   const session = useSession((s) => s.session);
   const info = useSession((s) => s.info);
   const flipMode = useSession((s) => s.flipMode);
@@ -247,7 +248,10 @@ export default function App() {
         <div className="w-px h-5 bg-white/10" />
         {session ? (
           <div className="flex items-center gap-2 text-xs text-tx-2 bg-surface border border-white/5 rounded-md px-2.5 py-1 min-w-0">
-            <span className={cx('w-1.5 h-1.5 rounded-full flex-shrink-0', online ? 'bg-ok' : 'bg-danger')} />
+            <span
+              title={engineState === 'online' ? 'Движок работает' : engineState === 'starting' ? 'Движок запускается…' : 'Движок не отвечает'}
+              className={cx('w-1.5 h-1.5 rounded-full flex-shrink-0', online ? 'bg-ok' : engineState === 'starting' ? 'bg-tx-3' : 'bg-danger')}
+            />
             <span className="truncate">
               Партия <b className="font-mono text-tx-1 text-[11.5px]">{folderName}</b>
             </span>
@@ -263,16 +267,24 @@ export default function App() {
           <span className="text-xs text-tx-3">Партия не открыта</span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {info && (
+          {engineState === 'online' && (
             <button
               onClick={() => useSession.getState().setModal('about', true)}
-              title={`Всё работает · движок v${info.version}`}
+              title={info ? `Всё работает · движок v${info.version}` : 'Всё работает'}
               className="text-[10px] font-semibold tracking-wide text-ok/80 bg-ok/10 border border-ok/20 rounded px-1.5 py-0.5 hover:bg-ok/15 transition-colors"
             >
               онлайн
             </button>
           )}
-          {!online && (
+          {engineState === 'starting' && (
+            <span
+              title="Движок запускается. Первый запуск занимает 3–10 секунд — это нормально, ничего делать не надо."
+              className="text-[10px] font-semibold tracking-wide text-tx-2 bg-white/5 border border-white/10 rounded px-1.5 py-0.5"
+            >
+              запуск…
+            </span>
+          )}
+          {engineState === 'offline' && (
             <span
               title="Приложение не может связаться с Python-движком. Закройте и откройте приложение заново."
               className="text-[10px] font-semibold tracking-wide text-danger bg-danger/15 border border-danger/30 rounded px-1.5 py-0.5"

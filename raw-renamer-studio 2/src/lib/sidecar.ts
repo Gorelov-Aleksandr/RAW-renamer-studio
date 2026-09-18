@@ -96,8 +96,16 @@ export function isTauri(): boolean {
   }
 }
 
+/**
+ * ЗАМ-001: раздельные состояния движка.
+ *  starting — до первого подтверждённого online (холодный старт 3–10 с — норма);
+ *  online   — heartbeat/READY подтверждают;
+ *  offline  — был online и перестал отвечать, либо sidecar умер.
+ */
+export type EngineState = 'starting' | 'online' | 'offline';
+
 export interface SidecarStatus {
-  status: 'online' | 'offline';
+  status: EngineState;
   port?: number;
 }
 
@@ -106,25 +114,43 @@ export type SidecarEvent =
   | { kind: 'dead'; code: number }
   | { kind: 'error'; message: string };
 
+const T0 = performance.now();
+const ts = () => `+${((performance.now() - T0) / 1000).toFixed(1)}s`;
+
 export function initSidecar(
   onStatus: (s: SidecarStatus) => void,
   onEvent?: (e: SidecarEvent) => void,
 ): void {
   let failCount = 0;
+  let baseUrlAt = 0; // BUG-015: момент получения URL (для grace-периода)
+  const markOnline = (port?: number) => {
+    failCount = 0;
+    onStatus({ status: 'online', port });
+  };
   const beat = async () => {
     try {
       await rpc('system.heartbeat', {}, 3500);
-      failCount = 0;
-      onStatus({ status: 'online' });
+      markOnline();
     } catch {
       failCount += 1;
-      if (failCount >= 2) onStatus({ status: 'offline' });
+      // Оффлайн не «вздрагивает» на первых 10 с после получения URL
+      // (uvicorn уже принял, но первые запросы на холодном PyInstaller
+      // бинарнике могут быть медленнее таймаута heartbeat).
+      if (failCount >= 2 && Date.now() - baseUrlAt > 10000) {
+        console.info(`[sidecar] offline: ${failCount} подряд heartbeat не прошли (${ts()})`);
+        onStatus({ status: 'offline' });
+      }
     }
   };
 
-  // FIX BUG-015: не дёргаем heartbeat, пока baseUrl пуст — иначе зря зажигаем offline
-  if (baseUrl) beat();
-  window.setInterval(() => { if (baseUrl) beat(); }, 3000);
+  // FIX BUG-015: в Tauri не дёргаем heartbeat, пока baseUrl пуст (иначе зря
+  // зажигаем offline). В браузере URL относительный (vite-прокси) — бьём сразу.
+  const beatable = () => baseUrl !== '' || !isTauri();
+  if (beatable()) {
+    baseUrlAt = Date.now();
+    beat();
+  }
+  window.setInterval(() => { if (beatable()) beat(); }, 3000);
 
   void (async () => {
     try {
@@ -135,13 +161,30 @@ export function initSidecar(
 
       // FIX BUG-015 (шаг 1): сначала пробуем получить URL напрямую,
       // до подписки на события — устраняем гонку "READY улетел раньше listen".
+      let reportedError = '';
       const probe = async (): Promise<boolean> => {
         try {
+          // ЗАМ-001/004: спрашиваем последнюю ошибку супервизора (нет
+          // бинарника, не запустили, лимит ретраев) — событие sidecar://error
+          // могло улететь ДО подписки вебвью. Опрос не останавливаем:
+          // часть ошибок (spawn) проходит после ретрая.
+          const fatal = await invoke<string | null>('sidecar_error');
+          if (fatal && !baseUrl) {
+            onStatus({ status: 'offline' });
+            if (fatal !== reportedError) {
+              reportedError = fatal;
+              console.info(`[sidecar] ошибка супервизора: ${fatal} (${ts()})`);
+              onEvent?.({ kind: 'error', message: fatal });
+            }
+          }
           const url = await invoke<string>('sidecar_url');
           if (url && !baseUrl) {
+            reportedError = ''; // восстановление — старую ошибку забываем
+            baseUrlAt = Date.now();
             setBaseUrl(url);
             const port = Number(url.split(':')[2]) || undefined;
-            onStatus({ status: 'online', port });
+            console.info(`[sidecar] URL получен: ${url} (${ts()})`);
+            markOnline(port);
             onEvent?.({ kind: 'ready', port: port ?? 0 });
             return true;
           }
@@ -154,14 +197,22 @@ export function initSidecar(
       const { listen } = await import('@tauri-apps/api/event');
 
       await listen<{ port: number }>('sidecar://ready', (e) => {
+        baseUrlAt = Date.now(); // каждый READY = (возможно) новый экземпляр — grace заново
         setBaseUrl(`http://127.0.0.1:${e.payload.port}`);
-        onStatus({ status: 'online', port: e.payload.port });
+        console.info(`[sidecar] событие ready: порт ${e.payload.port} (${ts()})`);
+        markOnline(e.payload.port);
         onEvent?.({ kind: 'ready', port: e.payload.port });
       });
       await listen<{ code: number }>('sidecar://dead', (e) => {
+        console.info(`[sidecar] событие dead: code=${e.payload.code} (${ts()})`);
+        onStatus({ status: 'offline' });
         onEvent?.({ kind: 'dead', code: e.payload.code });
       });
       await listen<{ message: string }>('sidecar://error', (e) => {
+        // Ошибки супервизора (нет бинарника, не запустить, лимит ретраев) —
+        // движок мёртв, не сидим в «запуск…» вечно.
+        console.info(`[sidecar] событие error: ${e.payload.message} (${ts()})`);
+        onStatus({ status: 'offline' });
         onEvent?.({ kind: 'error', message: e.payload.message });
       });
 

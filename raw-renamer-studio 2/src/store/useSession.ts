@@ -15,6 +15,8 @@ export type Filter = 'all' | 'ok' | 'warn' | 'err' | 'new';
 
 interface AppState {
   online: boolean;
+  /** ЗАМ-001: раздельные состояния (starting до первого online — не пугать красным) */
+  engineState: sc.EngineState;
   info: SystemInfo | null;
   session: SessionData | null;
   activeId: string | null;
@@ -69,6 +71,8 @@ interface AppState {
 
 let inited = false;
 let autoOpened = false;
+let lastToastKey = '';
+let lastToastTs = 0;
 
 export const useSession = create<AppState>()((set, get) => ({
   online: false,
@@ -86,14 +90,17 @@ export const useSession = create<AppState>()((set, get) => ({
   toasts: [],
   busy: false,
   lastExcelTs: 0,
+  engineState: 'starting',
 
   init: () => {
     if (inited) return;
     inited = true;
     sc.initSidecar(
       (status) => {
+        // ЗАМ-001: состояние движка (starting/online/offline) + online-булеан
+        // для блокировок кнопок.
+        set({ engineState: status.status, online: status.status === 'online' });
         const isOnline = status.status === 'online';
-        if (isOnline !== get().online) set({ online: isOnline });
         if (isOnline && !autoOpened) {
           autoOpened = true;
           void (async () => {
@@ -114,13 +121,23 @@ export const useSession = create<AppState>()((set, get) => ({
         if (e.kind === 'error') {
           get().toast('err', 'Ошибка приложения', e.message);
         }
-        // 'dead' — heartbeat сам переключит баннер на offline;
+        if (e.kind === 'dead') {
+          // 'dead' — сразу offline, не ждём двух провалов heartbeat.
+          set({ engineState: 'offline', online: false });
+        }
         // 'ready' — уже обработан внутри клиента (baseUrl + online)
       },
     );
   },
 
   toast: (kind, title, sub, actionLabel, action) => {
+    // ЗАМ-002: dedup — одинаковый тост (kind+title+sub) не чаще раза в 3 с.
+    // Без этого «Движок недоступен» мог накрыть экран толпой.
+    const key = `${kind}|${title}|${sub ?? ''}`;
+    const now = Date.now();
+    if (key === lastToastKey && now - lastToastTs < 3000) return;
+    lastToastKey = key;
+    lastToastTs = now;
     const id = Date.now() + Math.floor(Math.random() * 1000);
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, title, sub, actionLabel, action }] }));
     window.setTimeout(() => get().dropToast(id), 6500);
