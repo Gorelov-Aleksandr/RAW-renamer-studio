@@ -9,6 +9,7 @@
         system.heartbeat, system.info,
         session.open_folder, session.get, session.set_zayavka,
         session.move_frame, session.set_frame_suffix, session.apply_barcode,
+        session.refresh_angles,
         lookup.find_sku,
         zayavka.generate,
         renamer.plan, renamer.execute, renamer.undo, renamer.retry_xlsx, renamer.journal,
@@ -311,6 +312,65 @@ def h_apply_bc(p):
         it['is_new'] = r['source'] is None
         it['status'] = 'warn' if not it['has_label'] else 'ok'
         return {'item': it}
+
+
+@method('session.refresh_angles')
+def h_refresh_angles(p):
+    """v3.2: Обновить количество ракурсов в заявке на основе реальных файлов.
+
+    Сравнивает текущее кол-во кадров каждого товара с данными в заявке (L/M).
+    Если в заявке написано 8 ракурсов, а по факту 5 — обновляет на 5.
+    """
+    with LOCK:
+        if state.zayavka is None:
+            raise RpcError(4000, 'Заявка не загружена')
+        if not state.items:
+            raise RpcError(4000, 'Нет товаров в сессии')
+
+        updates = []
+        for it in state.items:
+            lm = it.get('lm_code')
+            if not lm:
+                continue
+            # Считаем реальные ракурсы (без _y/label)
+            n_clean = sum(1 for f in it['frames'] if not f.get('is_label'))
+            has_label = any(f.get('is_label') for f in it['frames'])
+
+            # Ищем строку в заявке
+            row = state.zayavka.find_row(lm=lm)
+            if row is None:
+                continue
+
+            old_l = state.zayavka.ws.cell(row, 12).value or 0
+            old_m = state.zayavka.ws.cell(row, 13).value or 0
+            new_l = n_clean
+            new_m = 1 if has_label else 0
+
+            if int(old_l) != new_l or int(old_m) != new_m:
+                updates.append({
+                    'lm': lm,
+                    'row': row,
+                    'old_L': int(old_l), 'new_L': new_l,
+                    'old_M': int(old_m), 'new_M': new_m,
+                })
+
+        if not updates:
+            return {'updated': 0, 'message': 'Все ракурсы актуальны'}
+
+        # Записываем изменения
+        for u in updates:
+            state.zayavka.ws.cell(u['row'], 12, u['new_L'])
+            state.zayavka.ws.cell(u['row'], 13, u['new_M'])
+
+        try:
+            state.zayavka.save_atomic()
+        except XlsxLockedError as e:
+            raise RpcError(4091, str(e))
+
+        return {
+            'updated': len(updates),
+            'changes': updates,
+        }
 
 
 @method('lookup.find_sku')

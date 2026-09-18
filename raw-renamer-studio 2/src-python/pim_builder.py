@@ -33,7 +33,7 @@ FIELD_MAP = {
     'id': 'lm', 'код lm': 'lm', 'lm code': 'lm',
     'название': 'name', 'товар': 'name', 'наименование': 'name', 'name': 'name',
     'отдел': 'otdel',
-    'штрих-код': 'gtin', 'штрихкод': 'gtin', 'gtin': 'gtin',
+    'штрих-код': 'gtin', 'штрихкод': 'gtin', 'gtin': 'gtin', 'штрих - код': 'gtin',
     'модель': 'model',
     'гамма': 'gamma',
 }
@@ -47,26 +47,60 @@ DEFAULTS = {
 }
 
 
+def _detect_encoding(raw: bytes) -> str:
+    """Автоопределение кодировки: UTF-16 LE/BE BOM, UTF-8 BOM, или fallback."""
+    if raw[:2] == b'\xff\xfe':
+        return 'utf-16-le'
+    if raw[:2] == b'\xfe\xff':
+        return 'utf-16-be'
+    if raw[:3] == b'\xef\xbb\xbf':
+        return 'utf-8-sig'
+    # Пробуем UTF-16 LE без BOM (PIM иногда так экспортирует)
+    try:
+        raw.decode('utf-16-le')
+        return 'utf-16-le'
+    except Exception:
+        pass
+    return 'utf-8'
+
+
 def read_pim(path) -> list[dict]:
     """Парсинг экспорта PIM → [{'lm','name','otdel','gtin','model','gamma'}]."""
     raw = Path(path).read_bytes()
-    if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
-        text = raw.decode('utf-16')
-    else:
-        text = raw.decode('utf-8-sig')
+    enc = _detect_encoding(raw)
+    try:
+        text = raw.decode(enc)
+    except Exception:
+        text = raw.decode('utf-8', errors='replace')
+
+    # Убираем BOM если есть
     text = text.lstrip('\ufeff')
+
     lines = [l for l in text.splitlines() if l.strip()]
     if not lines:
         return []
-    delim = '\t' if '\t' in lines[0] else (';' if ';' in lines[0] else ',')
+
+    # Определяем разделитель
+    first_line = lines[0]
+    if '\t' in first_line:
+        delim = '\t'
+    elif ';' in first_line:
+        delim = ';'
+    else:
+        delim = ','
+
     rows = [r for r in csv.reader(io.StringIO(text), delimiter=delim)
             if any(c.strip() for c in r)]
-    header = [h.strip().lower() for h in rows[0]]
+    if not rows:
+        return []
+
+    header = [h.strip().strip('"').lower() for h in rows[0]]
     idx: dict[str, int] = {}
     for i, h in enumerate(header):
         key = FIELD_MAP.get(h)
         if key is not None and key not in idx:
             idx[key] = i
+
     out = []
     for r in rows[1:]:
         def g(key: str) -> str:
@@ -74,6 +108,7 @@ def read_pim(path) -> list[dict]:
             if i is None or i >= len(r):
                 return ''
             return r[i].strip().strip('"')
+
         lm = g('lm')
         if len(lm) < 6:
             continue

@@ -43,6 +43,7 @@ interface AppState {
   flipMode: () => void;
   loadZayavka: (path: string) => Promise<void>;
   refresh: () => Promise<void>;
+  refreshAngles: () => Promise<void>;
   moveFrame: (itemId: string, from: number, to: number) => Promise<void>;
   setSuffix: (itemId: string, idx: number, suffix: string | null) => Promise<void>;
   applyBarcode: (itemId: string, barcode: string) => Promise<void>;
@@ -187,6 +188,31 @@ export const useSession = create<AppState>()((set, get) => ({
     }
   },
 
+  refreshAngles: async () => {
+    set({ busy: true });
+    try {
+      const r = await sc.rpc<{ updated: number; changes?: { lm: string; old_L: number; new_L: number; old_M: number; new_M: number }[] }>(
+        'session.refresh_angles',
+        {},
+      );
+      if (r.updated === 0) {
+        get().toast('info', 'Ракурсы актуальны', 'Все данные в заявке совпадают с файлами');
+      } else {
+        const details = r.changes?.slice(0, 5).map(c => `${c.lm}: ${c.old_L}→${c.new_L}`).join(', ');
+        get().toast(
+          'ok',
+          'Ракурсы обновлены',
+          `Обновлено ${r.updated} строк${r.changes && r.changes.length > 5 ? ` (показаны первые 5)` : ''}: ${details}${r.changes && r.changes.length > 5 ? '…' : ''}`,
+        );
+      }
+      await get().refresh();
+    } catch (e) {
+      get().toast('err', 'Ошибка обновления ракурсов', errMsg(e));
+    } finally {
+      set({ busy: false });
+    }
+  },
+
   moveFrame: async (itemId, from, to) => {
     const sess = get().session;
     if (!sess) return;
@@ -195,7 +221,7 @@ export const useSession = create<AppState>()((set, get) => ({
     );
     set({ session: { ...sess, items } });
     try {
-      await sc.rpc('session.move_frame', { item_id: itemId, from_idx: from, to_idx: to });
+      await sc.rpc('session.move_frame', { item_id: itemId, from_idx: from, idx: to });
     } catch (e) {
       get().toast('err', 'Не удалось переместить кадр', errMsg(e));
       await get().refresh();

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Download, FileSpreadsheet, FolderUp, UploadCloud } from 'lucide-react';
+import { Download, FileSpreadsheet, FolderUp, UploadCloud, RefreshCw } from 'lucide-react';
 import { useSession, errMsg } from '../store/useSession';
 import * as sc from '../lib/sidecar';
 import { cx } from '../lib/cx';
@@ -180,21 +180,33 @@ export default function ZayavkaModal() {
 
         <div className="p-5 overflow-y-auto flex flex-col gap-4 flex-1">
           {/* Статус подключения */}
-          <div
-            className={cx(
-              'flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg border text-[12.5px]',
-              zayName
-                ? 'bg-ok/10 border-ok/30 text-tx-1'
-                : 'bg-panel border-white/10 text-tx-3',
-            )}
-          >
-            <FileSpreadsheet size={15} className={zayName ? 'text-ok' : ''} />
-            {zayName ? (
-              <span>
-                Подключена: <span className="font-mono font-semibold">{zayName}</span>
-              </span>
-            ) : (
-              <span>Заявка к сессии не подключена</span>
+          <div className="flex items-center gap-3">
+            <div
+              className={cx(
+                'flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg border text-[12.5px] flex-1',
+                zayName
+                  ? 'bg-ok/10 border-ok/30 text-tx-1'
+                  : 'bg-panel border-white/10 text-tx-3',
+              )}
+            >
+              <FileSpreadsheet size={15} className={zayName ? 'text-ok' : ''} />
+              {zayName ? (
+                <span>
+                  Подключена: <span className="font-mono font-semibold">{zayName}</span>
+                </span>
+              ) : (
+                <span>Заявка к сессии не подключена</span>
+              )}
+            </div>
+            {zayName && (
+              <button
+                onClick={() => void useSession.getState().refreshAngles()}
+                className="h-[38px] px-3 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-1.5 flex-shrink-0"
+                title="Обновить количество ракурсов в заявке на основе реальных файлов"
+              >
+                <RefreshCw size={14} className="text-accent-text" />
+                Обновить ракурсы
+              </button>
             )}
           </div>
 
