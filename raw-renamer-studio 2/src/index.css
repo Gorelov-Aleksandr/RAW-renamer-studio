@@ -18,6 +18,19 @@ body {
   user-select: none;
 }
 
+/* v3.3 (C2): UI не выделяется «случайно», но данные — копируемы.
+   Поля ввода и элементы с .selectable (артикулы, ШК, имена) выбираемы. */
+input,
+textarea,
+select,
+option {
+  user-select: text;
+}
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
 /* Скроллбары в стиле прототипа */
 *::-webkit-scrollbar {
   width: 10px;

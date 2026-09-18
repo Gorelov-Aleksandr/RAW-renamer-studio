@@ -58,12 +58,10 @@ export default function StatusBar() {
         />
         {engines ? (
           <span className="text-[11.5px] text-tx-3">
-            ШК: {[engines.zxing && 'zxing', engines.opencv && 'opencv', engines.pyzbar && 'pyzbar']
-              .filter(Boolean)
-              .join(' + ') || 'нет движков'}
+            {engines.zxing || engines.opencv ? 'распознавание ШК активно' : 'распознавание ШК не настроено — см. «Настройки»'}
           </span>
         ) : (
-          <span className="text-[11.5px] text-tx-3">sidecar offline</span>
+          <span className="text-[11.5px] text-tx-3">движок не отвечает</span>
         )}
       </span>
       <button

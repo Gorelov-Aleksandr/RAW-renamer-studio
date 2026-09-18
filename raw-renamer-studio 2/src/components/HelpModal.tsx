@@ -86,7 +86,7 @@ export default function HelpModal() {
               <li>Именование: <span className="font-mono">код.CR2</span> (основной, без суффикса), <span className="font-mono">код_01.CR2…</span> (ракурсы), <span className="font-mono">код_y.CR2</span> (кадр с этикеткой).</li>
               <li>Кастомные суффиксы: <span className="font-mono">_com</span>, <span className="font-mono">_pack</span>, <span className="font-mono">_ins</span>, <span className="font-mono">_tag</span>.</li>
               <li>Excel открыт в Microsoft Excel — запись L/M блокируется; после закрытия файла нажмите «Повторить» в тосте.</li>
-              <li>Индикатор «SIDECAR OFFLINE» в шапке — Python-движок не запущен; операции блокируются до его старта.</li>
+              <li>Индикатор «движок не отвечает» в шапке — Python-движок не запущен; операции блокируются до его старта.</li>
             </ul>
           </section>
         </div>

@@ -1,5 +1,5 @@
 /**
- * Клиент Python Sidecar (master §8).
+ * Клиент Python-движок (master §8).
  *
  * Браузер / Tauri-dev: относительные URL /rpc, /preview/* — Vite-прокси
  * тащит их на 127.0.0.1:<порт из .sidecar/port>.
@@ -17,6 +17,8 @@ export class SidecarError extends Error {
   }
 }
 
+import { getSessionId, log, logError, setLogBaseUrl } from './logger';
+
 let baseUrl = '';
 let seq = 0;
 
@@ -26,6 +28,7 @@ export function base(): string {
 
 export function setBaseUrl(b: string): void {
   baseUrl = b;
+  setLogBaseUrl(b); // v3.3: логгер шлёт батчи на тот же sidecar
 }
 
 export async function rpc<T = unknown>(
@@ -36,21 +39,33 @@ export async function rpc<T = unknown>(
   const id = ++seq;
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t0 = performance.now();
   try {
     const res = await fetch(baseUrl + '/rpc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // v3.3: X-RRS-Session — корреляция запроса с логами sidecar
+      headers: { 'Content-Type': 'application/json', 'X-RRS-Session': getSessionId() },
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new SidecarError(`HTTP ${res.status}`, -1);
+    if (!res.ok) {
+      log('rpc_http_error', 'warn', { method, status: res.status, elapsed_ms: Math.round(performance.now() - t0) });
+      throw new SidecarError(`HTTP ${res.status}`, -1);
+    }
     const j = (await res.json()) as { result?: T; error?: { code: number; message: string } };
-    if (j.error) throw new SidecarError(j.error.message, j.error.code);
+    if (j.error) {
+      log('rpc_error', 'warn', { method, code: j.error.code, error: j.error.message });
+      throw new SidecarError(j.error.message, j.error.code);
+    }
     return j.result as T;
   } catch (e) {
     if (e instanceof SidecarError) throw e;
-    if (e instanceof DOMException && e.name === 'AbortError') throw new SidecarError('Таймаут запроса к sidecar', -1);
-    throw new SidecarError('Sidecar недоступен', -1);
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      logError('rpc_timeout', e, { method, timeout_ms: timeoutMs });
+      throw new SidecarError('Таймаут запроса к sidecar', -1);
+    }
+    logError('rpc_unreachable', e, { method });
+    throw new SidecarError('Движок недоступен', -1);
   } finally {
     clearTimeout(to);
   }

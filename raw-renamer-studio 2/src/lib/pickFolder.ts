@@ -52,7 +52,7 @@ async function collectDir(dir: unknown, depth = 0, out: File[] = []): Promise<Fi
 async function pickFolderBrowser(opts: PickOptions): Promise<void> {
   const st = useSession.getState();
   if (!st.online) {
-    st.toast('warn', 'Sidecar офлайн', 'Загрузка партии требует Python sidecar — проверьте статус в шапке');
+    st.toast('warn', 'Движок не отвечает', 'Загрузка партии требует Python-движок — проверьте статус в шапке');
     opts.onDone?.(false);
     return;
   }
@@ -119,7 +119,29 @@ async function pickFolderBrowser(opts: PickOptions): Promise<void> {
   if (rawFiles.length < files.length) {
     st.toast('info', 'Выбраны только RAW', `${rawFiles.length} из ${files.length} файлов (остальные пропущены)`);
   }
+  await importFilesAndOpen(rawFiles, folderName, opts);
+}
 
+/**
+ * Импорт готового набора RAW-файлов: загрузка в sidecar + открытие сессии.
+ * Вынесено из pickFolderBrowser, чтобы его смог использовать drag&drop.
+ */
+export async function importFilesAndOpen(
+  rawFiles: File[],
+  folderName: string,
+  opts: PickOptions = {},
+): Promise<void> {
+  const st = useSession.getState();
+  if (!st.online) {
+    st.toast('warn', 'Движок не отвечает', 'Загрузка партии требует Python-движок — проверьте статус в шапке');
+    opts.onDone?.(false);
+    return;
+  }
+  if (rawFiles.length === 0) {
+    st.toast('warn', 'RAW-файлы не найдены', `В «${folderName}» нет файлов: ${RAW_EXTS_LIST}`);
+    opts.onDone?.(false);
+    return;
+  }
   const total = rawFiles.length;
   let firstPath: string | null = null;
   let ok = true;
@@ -137,8 +159,6 @@ async function pickFolderBrowser(opts: PickOptions): Promise<void> {
   }
   opts.onDone?.(ok);
   if (!ok || !firstPath) return;
-
-  // Папка партии = каталог первого загруженного файла
   const folder = firstPath.replace(/[/\\][^/\\]+$/, '');
   await st.openFolder(folder, 'cv');
 }
@@ -150,7 +170,7 @@ async function pickFolderBrowser(opts: PickOptions): Promise<void> {
 export function pickFolder(opts: PickOptions = {}): Promise<void> {
   const st = useSession.getState();
   if (!st.online) {
-    st.toast('warn', 'Sidecar офлайн', 'Выбор папки недоступен — sidecar не отвечает');
+    st.toast('warn', 'Движок не отвечает', 'Выбор папки недоступен — запустите приложение заново');
     Promise.resolve().then(() => opts.onDone?.(false));
     return Promise.resolve();
   }

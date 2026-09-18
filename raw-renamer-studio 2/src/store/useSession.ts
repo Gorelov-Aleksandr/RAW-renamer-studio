@@ -105,14 +105,14 @@ export const useSession = create<AppState>()((set, get) => ({
                 await st.openFolder(info.demo.raw_folder, 'cv', info.demo.zayavka);
               }
             } catch {
-              /* sidecar не отвечает — баннер offline покажет состояние */
+              /* движок не отвечает — баннер offline покажет состояние */
             }
           })();
         }
       },
       (e) => {
         if (e.kind === 'error') {
-          get().toast('err', 'Ошибка sidecar', e.message);
+          get().toast('err', 'Ошибка приложения', e.message);
         }
         // 'dead' — heartbeat сам переключит баннер на offline;
         // 'ready' — уже обработан внутри клиента (baseUrl + online)
@@ -323,7 +323,7 @@ export const useSession = create<AppState>()((set, get) => ({
   undoLast: async () => {
     if (get().busy) return;
     if (!get().online) {
-      get().toast('info', 'Sidecar офлайн', 'Отмена недоступна — запустите Python sidecar');
+      get().toast('info', 'Движок не отвечает', 'Отмена недоступна — перезапустите приложение');
       return;
     }
     set({ busy: true });

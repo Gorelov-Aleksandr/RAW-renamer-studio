@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  CalendarDays, FileSpreadsheet, FolderOpen, Camera, History, FileText,
-  Database, Undo2, Settings, Plus, PanelLeftClose, Loader2,
+  CalendarDays, FileSpreadsheet, FolderOpen, Camera, History,
+  Undo2, Settings, Plus, PanelLeftClose, Loader2,
 } from 'lucide-react';
 import { useSession } from '../store/useSession';
 import { pickFolder, type PickProgress } from '../lib/pickFolder';
@@ -20,7 +20,7 @@ function SideLabel({ children }: { children: ReactNode }) {
 const itemCls =
   'flex items-center gap-2.5 w-full px-2 py-[7px] rounded-md text-[13px] text-tx-2 hover:bg-surface-hover hover:text-tx-1 transition-colors text-left';
 
-const OFFLINE_TITLE = 'Sidecar офлайн — операция недоступна';
+const OFFLINE_TITLE = 'Движок не отвечает — операция недоступна';
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
@@ -30,7 +30,6 @@ export default function Sidebar() {
   const online = useSession((s) => s.online);
   const openDemo = useSession((s) => s.openDemo);
   const busy = useSession((s) => s.busy);
-  const toast = useSession((s) => s.toast);
   const undoLast = useSession((s) => s.undoLast);
   const setModal = useSession((s) => s.setModal);
 
@@ -137,40 +136,6 @@ export default function Sidebar() {
         <button className={cx(itemCls, offCls)} onClick={showJournal} disabled={!online} title={online ? 'Сводка по журналу операций' : OFFLINE_TITLE}>
           <History size={16} className="flex-shrink-0" />
           Операции
-        </button>
-        <button
-          className={cx(itemCls, offCls)}
-          disabled={!online}
-          title={
-            online
-              ? 'Обратная запись: L (12) — ракурсы, M (13) — флаг _y после именования'
-              : OFFLINE_TITLE
-          }
-          onClick={() =>
-            toast(
-              'info',
-              'Журнал Excel',
-              'Обратная запись: L (12) — ракурсы, M (13) — флаг _y после именования',
-            )
-          }
-        >
-          <FileText size={16} className="flex-shrink-0" />
-          Журнал Excel
-        </button>
-        <button
-          className={cx(itemCls, offCls)}
-          disabled={!online}
-          title={online ? undefined : OFFLINE_TITLE}
-          onClick={() =>
-            toast(
-              'info',
-              'Кэш ШК → Артикул',
-              info ? `SQLite: ${info.cache_count} записей` : 'sidecar offline',
-            )
-          }
-        >
-          <Database size={16} className="flex-shrink-0" />
-          Кэш ШК
         </button>
         <button className={cx(itemCls, offCls)} onClick={() => void undoLast()} disabled={!online} title={online ? 'Отменить последнее переименование (⌘Z)' : OFFLINE_TITLE}>
           <Undo2 size={16} className="flex-shrink-0" />

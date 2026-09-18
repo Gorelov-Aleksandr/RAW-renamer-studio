@@ -37,7 +37,7 @@ export default function ZayavkaModal() {
 
   const pickXlsx = async () => {
     if (!online) {
-      toast('warn', 'Sidecar офлайн', 'Загрузка заявки недоступна — запустите Python sidecar');
+      toast('warn', 'Движок не отвечает', 'Загрузка заявки недоступна — перезапустите приложение');
       return;
     }
     // Tauri: нативный выбор файла
@@ -204,8 +204,8 @@ export default function ZayavkaModal() {
             <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg bg-warn/10 border border-warn/30 text-[12.5px] text-tx-1">
               <span className="w-2 h-2 rounded-full bg-warn flex-shrink-0" />
               <span>
-                <b>Sidecar офлайн.</b> Загрузка и генерация заявки недоступны —
-                запустите Python sidecar (статус — в шапке приложения).
+                <b>Движок не отвечает.</b> Загрузка и генерация заявки недоступны —
+                перезапустите приложение (статус — в шапке приложения).
               </span>
             </div>
           )}
@@ -237,7 +237,7 @@ export default function ZayavkaModal() {
                   'h-[38px] px-3 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-1.5 flex-shrink-0',
                   !online && 'opacity-40 cursor-not-allowed',
                 )}
-                title={online ? 'Обновить количество ракурсов в заявке на основе реальных файлов' : 'Sidecar офлайн — недоступно'}
+                title={online ? 'Обновить количество ракурсов в заявке на основе реальных файлов' : 'Движок не отвечает — недоступно'}
               >
                 <RefreshCw size={14} className="text-accent-text" />
                 Обновить ракурсы
@@ -272,7 +272,7 @@ export default function ZayavkaModal() {
                 'h-9 px-4 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12.5px] font-semibold hover:bg-elevated inline-flex items-center gap-2 self-start',
                 !online && 'opacity-40 cursor-not-allowed',
               )}
-              title={online ? 'Выбрать .xlsx с системы (нативный диалог)' : 'Sidecar офлайн — недоступно'}
+              title={online ? 'Выбрать .xlsx с системы (нативный диалог)' : 'Движок не отвечает — недоступно'}
             >
               <FolderUp size={15} className="text-accent-text" />
               Выбрать файл заявки…
@@ -291,7 +291,7 @@ export default function ZayavkaModal() {
               aria-disabled={!online}
               onClick={() => {
                 if (!online) {
-                  toast('warn', 'Sidecar офлайн', 'Загрузка CSV недоступна — запустите Python sidecar');
+                  toast('warn', 'Движок не отвечает', 'Загрузка CSV недоступна — перезапустите приложение');
                   return;
                 }
                 if (csvRef.current) {
@@ -323,7 +323,7 @@ export default function ZayavkaModal() {
                 e.preventDefault();
                 setDrag(false);
                 if (!online) {
-                  toast('warn', 'Sidecar офлайн', 'Загрузка CSV недоступна — запустите Python sidecar');
+                  toast('warn', 'Движок не отвечает', 'Загрузка CSV недоступна — перезапустите приложение');
                   return;
                 }
                 const f = e.dataTransfer.files?.[0];
@@ -358,7 +358,7 @@ export default function ZayavkaModal() {
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!online) {
-                      toast('warn', 'Sidecar офлайн', 'Демо-выгрузка недоступна — запустите Python sidecar');
+                      toast('warn', 'Движок не отвечает', 'Демо-выгрузка недоступна — перезапустите приложение');
                       return;
                     }
                     void generate(info.demo!.pim);

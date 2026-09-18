@@ -1,6 +1,8 @@
-import { useEffect } from 'react';
-import { useSession } from './store/useSession';
+import { Component, useEffect, type ReactNode } from 'react';
+import { useSession, errMsg } from './store/useSession';
 import * as sc from './lib/sidecar';
+import { log, logError } from './lib/logger';
+import { pickFolder } from './lib/pickFolder';
 import { cx } from './lib/cx';
 import Sidebar from './components/Sidebar';
 import Toolbar from './components/Toolbar';
@@ -21,6 +23,44 @@ import { Logo } from './components/Logo';
 
 export { Logo };
 
+/**
+ * v3.3 (C5): ErrorBoundary — рендер-ошибка не убивает всё приложение.
+ * Показываем понятный экран с кнопкой «Перезапустить».
+ */
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    logError('render_crash', error);
+  }
+  private reset = () => {
+    this.setState({ error: null });
+    window.location.reload();
+  };
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-base text-tx-1 p-8 text-center">
+        <div className="text-[15px] font-semibold">Что-то пошло не так</div>
+        <div className="text-[13px] text-tx-2 max-w-md">
+          Приложение столкнулось с неожиданным сбоем. Данные партии не пострадали.
+        </div>
+        <div className="font-mono text-[11px] text-tx-3 max-w-md break-all">
+          {this.state.error.message}
+        </div>
+        <button
+          onClick={this.reset}
+          className="mt-2 h-9 px-5 rounded-lg bg-accent-fill hover:bg-[#6A57E2] text-white text-[13px] font-bold"
+        >
+          Перезапустить приложение
+        </button>
+      </div>
+    );
+  }
+}
+
 export default function App() {
   const init = useSession((s) => s.init);
   const online = useSession((s) => s.online);
@@ -31,6 +71,102 @@ export default function App() {
   useEffect(() => {
     init();
   }, [init]);
+
+  // v3.3 (L5): drag&drop папки съёмки / заявки прямо на окно приложения.
+  // Tauri: событие tauri://drag-drop (WKWebView не отдаёт содержимое папок
+  // через DataTransfer — нативное событие даёт реальные пути).
+  // Браузер: webkitGetAsEntry (Chromium) / входные файлы.
+  useEffect(() => {
+    if (!sc.isTauri()) {
+      const onDrop = async (e: DragEvent) => {
+        if (!e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        const st = useSession.getState();
+        const files = Array.from(e.dataTransfer.files);
+        const xlsx = files.find((f) => /\.(xlsx|xlsm)$/i.test(f.name));
+        if (xlsx) {
+          log('dnd_zayavka', 'info', { file: xlsx.name });
+          try {
+            // браузер не знает путей — загружаем файл в sidecar и открываем копию
+            const up = await sc.uploadFile(xlsx);
+            await st.loadZayavka(up.path);
+          } catch (e) {
+            st.toast('err', 'Не удалось загрузить заявку', errMsg(e));
+          }
+          return;
+        }
+        const raw = files.filter((f) => /\.(cr2|cr3|arw|nef|orf|rw2|dng|raf|nrw|pef|x3f)$/i.test(f.name));
+        if (raw.length === 0) {
+          st.toast('info', 'Нет RAW-файлов', 'Перетащите папку со съёмкой или файл .xlsx заявки');
+        } else {
+          st.toast('info', 'Перетащите папку целиком', 'Отдельные RAW-файлы не образуют партию — нужна папка съёмки');
+        }
+      };
+      window.addEventListener('drop', onDrop);
+      const onOver = (e: DragEvent) => e.preventDefault();
+      window.addEventListener('dragover', onOver);
+      return () => {
+        window.removeEventListener('drop', onDrop);
+        window.removeEventListener('dragover', onOver);
+      };
+    }
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen<{ type: string; paths: string[] }>('tauri://drag-drop', (e) => {
+          if (e.payload.type !== 'drop' || !e.payload.paths.length) return;
+          void (async () => {
+            const st = useSession.getState();
+            for (const p of e.payload.paths) {
+              if (/\.xlsx?$/i.test(p)) {
+                log('dnd_zayavka', 'info', { path: p });
+                await st.loadZayavka(p);
+                continue;
+              }
+              try {
+                const isDir = await sc.rpc<{ is_dir: boolean }>('fs.is_dir', { path: p });
+                if (isDir.is_dir) {
+                  log('dnd_folder', 'info', { path: p });
+                  await st.openFolder(p, 'cv');
+                  return;
+                }
+              } catch {
+                continue;
+              }
+            }
+            st.toast('info', 'Перетащите папку целиком', 'Отдельные RAW-файлы не образуют партию — нужна папка съёмки');
+          })();
+        });
+      } catch {
+        /* слушатель не поднимется — DnD просто недоступен */
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  // v3.3 (D3): события нативного меню macOS (menu://*) → те же действия, что и кнопки.
+  useEffect(() => {
+    if (!sc.isTauri()) return;
+    const un: (() => void)[] = [];
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        un.push(await listen('menu://open', () => void pickFolder()));
+        un.push(
+          await listen('menu://settings', () => useSession.getState().setModal('settings', true)),
+        );
+        un.push(await listen('menu://undo', () => void useSession.getState().undoLast()));
+        un.push(await listen('menu://help', () => useSession.getState().setModal('help', true)));
+        un.push(
+          await listen('menu://about', () => useSession.getState().setModal('about', true)),
+        );
+      } catch {
+        /* меню недоступно — не критично */
+      }
+    })();
+    return () => un.forEach((f) => f());
+  }, []);
 
   // Глобальные горячие клавиши (master §10 / прототип)
   useEffect(() => {
@@ -46,6 +182,13 @@ export default function App() {
         e.preventDefault();
         // BUG-008: настоящая командная палитра (был тост-заглушка)
         st.setModal('palette', !st.modals.palette);
+        return;
+      }
+      // v3.3: ⌘O — открыть папку съёмки (нативный диалог / браузерный picker)
+      if (mod && ['o', 'O', 'х', 'Х'].includes(e.key)) {
+        e.preventDefault();
+        log('hotkey_open');
+        void pickFolder();
         return;
       }
       if (e.key === 'Escape') {
@@ -121,11 +264,20 @@ export default function App() {
         )}
         <div className="ml-auto flex items-center gap-2">
           {info && (
-            <span className="font-mono text-[10px] text-tx-3 hidden md:inline">sidecar :{info.port}</span>
+            <button
+              onClick={() => useSession.getState().setModal('about', true)}
+              title={`Всё работает · движок v${info.version}`}
+              className="text-[10px] font-semibold tracking-wide text-ok/80 bg-ok/10 border border-ok/20 rounded px-1.5 py-0.5 hover:bg-ok/15 transition-colors"
+            >
+              онлайн
+            </button>
           )}
           {!online && (
-            <span className="text-[10px] font-bold tracking-wider text-danger bg-danger/15 border border-danger/30 rounded px-1.5 py-0.5">
-              SIDECAR OFFLINE
+            <span
+              title="Приложение не может связаться с Python-движком. Закройте и откройте приложение заново."
+              className="text-[10px] font-semibold tracking-wide text-danger bg-danger/15 border border-danger/30 rounded px-1.5 py-0.5"
+            >
+              движок не отвечает
             </span>
           )}
           <span className="hidden sm:inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg font-mono text-[11px] text-tx-3 bg-white/5 border border-white/10">

@@ -8,7 +8,7 @@ import { useSession, errMsg } from '../store/useSession';
 export async function showJournalSummary(): Promise<void> {
   const toast = useSession.getState().toast;
   if (!useSession.getState().online) {
-    toast('warn', 'Sidecar офлайн', 'Журнал операций недоступен — запустите Python sidecar');
+    toast('warn', 'Движок не отвечает', 'Журнал операций недоступен — перезапустите приложение');
     return;
   }
   try {

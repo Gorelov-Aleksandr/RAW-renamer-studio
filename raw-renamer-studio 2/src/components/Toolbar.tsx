@@ -77,7 +77,7 @@ export default function Toolbar() {
       <button
         onClick={() => void undoLast()}
         disabled={!online}
-        title={online ? 'Отмена последней операции (⌘Z)' : 'Sidecar офлайн — отмена недоступна'}
+        title={online ? 'Отмена последней операции (⌘Z)' : 'Движок не отвечает — отмена недоступна'}
         className={cx(
           'h-8 px-3 rounded-lg bg-input border border-white/10 text-[12.5px] font-semibold text-tx-2 hover:bg-elevated hover:text-tx-1 flex items-center gap-1.5',
           !online && 'opacity-40 cursor-not-allowed',

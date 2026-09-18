@@ -5,7 +5,7 @@
 > Единственный источник правды по СПЕЦИФИКАЦИИ — `docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md`
 > (VER 3.0, 1549 строк). По процессу и статусу — этот файл.
 
-**Дата последнего обновления: 2026-09-18 (МСК) — багфикс v3.2.2 (BUG-001…BUG-008, см. BUGS_FIXED.md)**
+**Дата последнего обновления: 2026-09-18 (МСК) — глубокий аудит + v3.3 (22 бага исправлено, 80 автотестов, см. AUDIT.md)**
 
 ---
 
@@ -33,10 +33,29 @@
 
 ## 3. ТЕКУЩИЙ ЭТАП (читать в первую очередь при продолжении)
 
-**Этап: v3.2.2 — багфикс по отчёту QA (BUG-001…BUG-008) готов к проверке.**
+**Этап: v3.3 — глубокий аудит (QA+UX+архитектура) + 22 бага исправлено, 80 автотестов.
+Следующий шаг: `cargo tauri build` на macOS + ручной прогон (Rust не компилировался в песочнице).**
 
 ХРОНИКА:
-0. **БАГФИКС QA (2026-09-18) — СДЕЛАНО (v3.2.2, см. BUGS_FIXED.md):**
+0a. **ГЛУБОКИЙ АУДИТ + V3.3 (2026-09-18) — СДЕЛАНО (см. AUDIT.md):**
+   - Найдено/исправлено 22 бага: 3 HIGH рантайм (G1 DnD-кадров `idx`/`to_idx`,
+     G2 гонка старта READY-до-accept, B2 произвольное чтение file.download),
+     T3 нет capability (NSOpenPanel блокировался), D1 зомби-sidecar (kill-on-exit),
+     D2 ложная смерть (watchdog 30с + сброс рестартов), B1 APIM последовательно
+     (параллельно 6 + circuit breaker).
+   - UX/архитектура: жаргон убран («движок не отвечает», «сервер Леруа Мерлен»),
+     Настройки Базовые/Про, ErrorBoundary, ⌘O, DnD папки на окно, нативное меню
+     macOS, CSP, user-select на данных, битые превью onError.
+   - Логирование (L1): JSONL sidecar (rrslog.py, ротация gzip 5МБ×3) + FE (logger.ts,
+     POST /log, correlation X-RRS-Session) + CLI-декодер tools/logcat.py.
+   - Persist (L2/L6): settings.json + last_session.json в data_dir (переживают рестарт).
+   - Память/скорость: mmap RAW (B13), per-frame ext + коллизия LM 4090 (B5),
+     /upload 400МБ поток (B3), /preview 404 на битом JPEG (B4), .tmp_rename очистка (B6),
+     undo missing-отчёт + журнал ≤100 (B7), OpenCV plausibility (B11).
+   - Тесты: tests/{test_pim_parser 24, test_server 52, test_perf 4} = 80 passed.
+   - Осталось (на macOS): cargo tauri build + ручной прогон NSOpenPanel/меню/DnD/
+     kill-on-exit/App Nap; прогресс скана больших партий; a11y-проход.
+0b. **БАГФИКС QA (2026-09-18) — СДЕЛАНО (v3.2.2, см. BUGS_FIXED.md):**
    - BUG-004: переписан детект кодировки CSV (UTF-16 LE/BE ±BOM, UTF-8 ±BOM,
      cp1251) — корень «The string did not match the expected pattern»;
      информативные ошибки парсинга (кодировка/разделитель/столбцы).

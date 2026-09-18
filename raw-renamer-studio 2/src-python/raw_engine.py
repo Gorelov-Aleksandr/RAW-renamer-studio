@@ -39,12 +39,15 @@ def file_hash(path: Path) -> str:
     return hashlib.sha1(raw).hexdigest()[:16]
 
 
-def find_jpeg_spans(data: bytes, max_spans: int = 128) -> list[tuple[int, int]]:
-    """Все вхождения JPEG-диапазонов (SOI…EOI) внутри контейнера."""
+def find_jpeg_spans(data, max_spans: int = 128) -> list[tuple[int, int]]:
+    """Все вхождения JPEG-диапазонов (SOI…EOI) внутри контейнера.
+
+    data — bytes или mmap (v3.3: mmap, чтобы не держать весь файл в RAM).
+    """
     spans: list[tuple[int, int]] = []
     n = len(data)
     pos = 0
-    while pos < n:
+    while pos < n and len(spans) < max_spans:
         s = data.find(_SOI, pos)
         if s < 0:
             break
@@ -57,9 +60,9 @@ def find_jpeg_spans(data: bytes, max_spans: int = 128) -> list[tuple[int, int]]:
     return spans
 
 
-def extract_preview_bytes(data: bytes) -> Optional[bytes]:
+def extract_preview_bytes(data: bytes, max_spans: int = 32) -> Optional[bytes]:
     """Крупнейший встроенный JPEG (главное превью). None, если не найден."""
-    spans = find_jpeg_spans(data)
+    spans = find_jpeg_spans(data, max_spans=max_spans)
     if not spans:
         return None
     s, e = max(spans, key=lambda t: t[1] - t[0])
@@ -69,7 +72,32 @@ def extract_preview_bytes(data: bytes) -> Optional[bytes]:
 
 
 def extract_preview(path: Path) -> Optional[bytes]:
-    return extract_preview_bytes(Path(path).read_bytes())
+    """v3.3: mmap-чтение — файл не грузится целиком в память; в память
+    попадает только найденный JPEG (обычно 1–8 МБ из 25 МБ RAW)."""
+    p = Path(path)
+    try:
+        size = p.stat().st_size
+        if size < _MIN_PREVIEW:
+            return None
+        import mmap
+        with open(p, 'rb') as f:
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                spans = find_jpeg_spans(mm, max_spans=32)
+                if not spans:
+                    return None
+                s, e = max(spans, key=lambda t: t[1] - t[0])
+                if e - s < _MIN_PREVIEW:
+                    return None
+                return mm[s:e]
+            finally:
+                mm.close()
+    except (OSError, ValueError):
+        # пустой файл / FS без mmap-поддержки — fallback
+        try:
+            return extract_preview_bytes(p.read_bytes())
+        except OSError:
+            return None
 
 
 def make_jpeg_thumb(jpeg: bytes, size: int, quality: int = 85) -> bytes:

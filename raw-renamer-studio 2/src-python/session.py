@@ -52,7 +52,18 @@ def _frame(f: Path, is_label: bool) -> dict:
         'is_label': is_label,
         'suffix_custom': None,
         'preview': file_hash(f),
+        'ext': f.suffix or '.CR2',  # v3.3: расширение каждого файла отдельно
     }
+
+
+def _cleanup_tmp(folder: Path, warnings: list) -> None:
+    """v3.3: убрать осиротевшие .tmp_rename от прерванной предыдущей операции."""
+    for f in folder.glob('*.tmp_rename'):
+        try:
+            f.unlink()
+            warnings.append(f'Убрано осиротевшее временное имя: {f.name}')
+        except OSError:
+            pass
 
 
 def scan_folder(folder, mode: str = 'cv',
@@ -63,10 +74,11 @@ def scan_folder(folder, mode: str = 'cv',
         raise FileNotFoundError(f'Папка не найдена: {folder}')
     files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in RAW_EXTS]
     files.sort(key=lambda f: natural_sort_key(f.name))
+    warnings: list[str] = []
+    _cleanup_tmp(folder, warnings)
 
     items: list[dict] = []
     current: Optional[dict] = None
-    warnings: list[str] = []
 
     def start_item(barcode: Optional[str], source: str, frame: Path, is_label: bool) -> None:
         nonlocal current
@@ -145,11 +157,11 @@ def plan_item(item: dict, lm: str) -> list[dict]:
     frames = item['frames']
     if not frames:
         return []
-    ext = Path(frames[0]['name']).suffix or '.CR2'
     label_i = next((i for i, f in enumerate(frames) if f['is_label']), None)
     rows: list[dict] = []
     if label_i is not None:
-        rows.append({'src': frames[label_i]['name'], 'dst': f'{lm}_y{ext}',
+        lf = frames[label_i]
+        rows.append({'src': lf['name'], 'dst': f"{lm}_y{lf.get('ext', Path(lf['name']).suffix)}",
                      'kind': 'label', 'item_id': item['id']})
     clean = [f for i, f in enumerate(frames) if i != label_i]
     for i, f in enumerate(clean):
@@ -162,6 +174,7 @@ def plan_item(item: dict, lm: str) -> list[dict]:
             if not suf or not SUFFIX_RE.match(suf):
                 suf = f'_{i:02d}'
             kind = 'angle'
+        ext = f.get('ext') or (Path(f['name']).suffix or '.CR2')  # v3.3: ext файла
         rows.append({'src': f['name'], 'dst': f'{lm}{suf}{ext}',
                      'kind': kind, 'item_id': item['id']})
     return rows

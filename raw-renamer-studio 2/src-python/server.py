@@ -43,13 +43,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from excel_worker import ExcelWorker, XlsxLockedError  # noqa: E402
 from lookup import Lookup  # noqa: E402
 from pim_builder import build_csv, build_xlsx, read_pim  # noqa: E402
-from raw_engine import extract_preview_bytes, file_hash, make_jpeg_thumb  # noqa: E402
+from raw_engine import extract_preview, extract_preview_bytes, file_hash, make_jpeg_thumb  # noqa: E402
 from renamer import Journal, RenameError, execute as execute_rename, undo_rename  # noqa: E402
+from rrslog import RrsLog, summarize  # noqa: E402
 from scanner import engines as scanner_engines  # noqa: E402
 from session import plan_item, scan_folder  # noqa: E402
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 START = time.time()
+
+LOG: Optional[RrsLog] = None  # инициализируется в main()
+RUN_ID = ''
+
+
+def log(action: str, level: str = 'info', session_id: Optional[str] = None, **kw) -> None:
+    """Универсальный логгер (no-op до инициализации main)."""
+    if LOG is not None:
+        LOG.log(action, level=level, session_id=session_id, **kw)
 
 app = FastAPI(title='RAW Renamer Studio Sidecar', version=VERSION)
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
@@ -81,19 +91,59 @@ class S:
 state = S()
 LOCK = threading.RLock()
 
+SETTINGS_FILE_NAME = 'settings.json'
+DEFAULT_SETTINGS = {
+    'apim_env': 'preprod',
+    'apim_enabled': True,
+    'customer_id': '60071799',
+}
+
+
+def _settings_path() -> Path:
+    return state.data_dir / SETTINGS_FILE_NAME
+
+
+def load_settings() -> dict:
+    """v3.3: настройки сохраняются между запусками (master: «не сбрасываются»)."""
+    s = dict(DEFAULT_SETTINGS)
+    p = _settings_path()
+    if not p.exists():
+        return s  # первый запуск — не ошибка
+    try:
+        s.update(json.loads(p.read_text(encoding='utf-8')))
+    except Exception as e:
+        log('settings_load', level='warn', error=f'файл повреждён, использую дефолты: {e}')
+    return s
+
+
+def save_settings(s: dict) -> None:
+    try:
+        p = _settings_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + '.tmp')
+        tmp.write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding='utf-8')
+        os.replace(tmp, p)
+    except Exception as e:
+        log('settings_save', level='warn', error=str(e))
+
+
 PREV_CACHE: dict[str, bytes] = {}
 PREV_CACHE_MAX = 80 * 1024 * 1024
 THUMB_CACHE: dict[tuple[str, int], bytes] = {}
 
 
 def _get_preview(path: Path) -> Optional[bytes]:
-    """Встроенный JPEG файла (с LRU-кэшем). hash → path регистрируется."""
+    """Встроенный JPEG файла (с LRU-кэшем). hash → path регистрируется.
+
+    v3.3: чтение через mmap (raw_engine.extract_preview) — в RAM попадает
+    только сам JPEG, а не весь 25 МБ RAW.
+    """
     h = file_hash(path)
     state.file_registry[h] = path
     if h in PREV_CACHE:
         return PREV_CACHE[h]
     try:
-        prev = extract_preview_bytes(path.read_bytes())
+        prev = extract_preview(path)
     except OSError:
         prev = None
     if prev:
@@ -127,23 +177,58 @@ def _set_zayavka(path: Path) -> None:
     state.zayavka_path = Path(path)
 
 
-def _enrich(items: list) -> None:
-    """Каскадный lookup для всех товаров (Заявка → кэш → APIM)."""
+def _apply_lookup(it: dict, r: dict) -> None:
+    it['lm_code'] = r['lm']
+    it['product_name'] = r.get('name')
+    it['lookup_source'] = r['source']
+    it['excel_row'] = r.get('row')
+    it['is_new'] = r['source'] is None
+    if not it['has_label']:
+        it['status'] = 'warn'
+    elif it['lm_code'] or it['lookup_source'] is not None:
+        it['status'] = 'ok'
+    else:
+        it['status'] = 'ok'
+
+
+def _enrich(items: list, session_id: Optional[str] = None) -> None:
+    """Каскадный lookup для всех товаров (Заявка → кэш → APIM).
+
+    v3.3: быстрая часть (заявка+кэш) — последовательно; APIM — параллельно
+    (6 потоков) с circuit breaker. 100 «новых» товаров больше не дают
+    100 × 5 с блокировки open_folder.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    todo: list[dict] = []
     for it in items:
         if not it.get('barcode'):
             continue
-        r = state.lookup.find(it['barcode'], state.zayavka)
-        it['lm_code'] = r['lm']
-        it['product_name'] = r.get('name')
-        it['lookup_source'] = r['source']
-        it['excel_row'] = r.get('row')
-        it['is_new'] = r['source'] is None
-        if not it['has_label']:
-            it['status'] = 'warn'
-        elif it['lm_code'] or it['lookup_source'] is not None:
-            it['status'] = 'ok'
+        r = state.lookup.find_local(it['barcode'], state.zayavka)
+        if r['source'] is not None:
+            _apply_lookup(it, r)
         else:
-            it['status'] = 'ok'
+            todo.append(it)
+
+    api_found = 0
+    if todo and state.lookup.enabled and not state.lookup.api_down():
+        t0 = time.time()
+        with ThreadPoolExecutor(max_workers=6, thread_name_prefix='apim') as ex:
+            futs = {ex.submit(state.lookup.find_api, it['barcode']): it for it in todo}
+            for f in as_completed(futs, timeout=120):
+                it = futs[f]
+                try:
+                    r = f.result()
+                except Exception:
+                    r = None
+                if r:
+                    _apply_lookup(it, r)
+                    api_found += 1
+        log('enrich_api', session_id=session_id, total=len(todo), found=api_found,
+            elapsed_ms=round((time.time() - t0) * 1000), api_down=state.lookup.api_down())
+    for it in todo:
+        if it['lookup_source'] is None:
+            _apply_lookup(it, {'lm': None, 'name': None, 'source': None, 'row': None})
 
 
 def ean13_ok(bc: str) -> bool:
@@ -199,7 +284,8 @@ def h_info(p):
 
 @method('system.set_apim')
 def h_set_apim(p):
-    """v3.1: смена окружения/режима APIM на лету («Настройки»)."""
+    """v3.1: смена окружения/режима APIM на лету («Настройки»).
+    v3.3: значение сохраняется в settings.json и переживает перезапуск."""
     with LOCK:
         env = str(p.get('env', 'preprod'))
         if env not in ('preprod', 'prod'):
@@ -209,14 +295,36 @@ def h_set_apim(p):
                               customer_id=getattr(state, 'customer_id', '60071799'),
                               enabled=enabled)
         state.api_env, state.api_enabled = env, enabled
+        s = load_settings()
+        s['apim_env'] = env
+        s['apim_enabled'] = enabled
+        save_settings(s)
+        log('set_apim', session_id=p.get('_session'), env=env, enabled=enabled)
         return {'env': env, 'enabled': enabled, 'cache': state.lookup.stats()}
 
 
 # --- session ------------------------------------------------------------------
+def _save_last_session() -> None:
+    """v3.3: запомнить последнюю сессию для восстановления после перезапуска."""
+    if state.folder is None:
+        return
+    try:
+        p = state.data_dir / 'last_session.json'
+        p.write_text(json.dumps({
+            'folder': str(state.folder),
+            'mode': state.mode,
+            'zayavka': str(state.zayavka_path) if state.zayavka_path else None,
+            'ts': time.strftime('%Y-%m-%d %H:%M:%S'),
+        }, ensure_ascii=False), encoding='utf-8')
+    except Exception as e:
+        log('last_session_save', level='warn', error=str(e))
+
+
 @method('session.open_folder')
 def h_open_folder(p):
     folder = Path(p['folder']).expanduser()
     mode = p.get('mode', 'cv')
+    t0 = time.time()
     with LOCK:
         if p.get('zayavka'):
             try:
@@ -227,10 +335,21 @@ def h_open_folder(p):
             res = scan_folder(folder, mode=mode, preview_loader=_get_preview)
         except FileNotFoundError as e:
             raise RpcError(4004, str(e))
+        except PermissionError:
+            raise RpcError(4004, 'Нет доступа к папке — проверьте права macOS '
+                                  '(Системные настройки → Приватность → Файлы и папки)')
+        except OSError as e:
+            # сетевое хранилище отвалилось, битая ФС и т.п.
+            raise RpcError(4000, f'Не удалось прочитать папку: {e}')
         _enrich(res['items'])
         state.items = res['items']
         state.folder = folder
         state.mode = mode
+        _save_last_session()
+        log('open_folder', session_id=p.get('_session'), folder=folder.name,
+            mode=mode, items=len(res['items']), frames=res['total_frames'],
+            warnings=len(res['warnings']),
+            elapsed_ms=round((time.time() - t0) * 1000))
         return {
             'folder': str(folder), 'mode': mode,
             'zayavka': str(state.zayavka_path) if state.zayavka_path else None,
@@ -253,11 +372,20 @@ def h_get(p):
 @method('session.set_zayavka')
 def h_set_zayavka(p):
     with LOCK:
+        path = p.get('path')
+        if not path:
+            # v3.3: явное снятие заявки (path: null)
+            state.zayavka = None
+            state.zayavka_path = None
+            _enrich(state.items)
+            _save_last_session()
+            return {'zayavka': None, 'items': state.items}
         try:
-            _set_zayavka(Path(p['path']))
+            _set_zayavka(Path(path))
         except (FileNotFoundError, XlsxLockedError) as e:
             raise RpcError(4040, str(e))
         _enrich(state.items)
+        _save_last_session()
         return {'zayavka': str(state.zayavka_path), 'items': state.items}
 
 
@@ -266,7 +394,7 @@ def h_move(p):
     with LOCK:
         it = _item(p['item_id'])
         fr = it['frames']
-        i, j = int(p['from_idx']), int(p['to_idx'])
+        i, j = int(p['from_idx']), int(p.get('to_idx', p.get('idx', p['from_idx'])))
         if not (0 <= i < len(fr) and 0 <= j < len(fr)):
             raise RpcError(4000, 'Индекс вне диапазона')
         fr.insert(j, fr.pop(i))
@@ -431,6 +559,19 @@ def h_plan(p):
                                 'reason': 'нет ШК' if not it['barcode'] else 'нет кода LM'})
                 continue
             rows.extend(plan_item(it, it['lm_code']))
+        # v3.3: дублирующий код LM в заявке → два товара претендуют на одно имя
+        seen: dict[str, list[str]] = {}
+        for r in rows:
+            seen.setdefault(r['dst'], []).append(r['item_id'])
+        dups = {dst: ids for dst, ids in seen.items() if len(set(ids)) > 1}
+        if dups:
+            dst, ids = next(iter(dups.items()))
+            by_id = {it['id']: it for it in state.items}
+            lms = {str(by_id[i]['lm_code']) for i in ids if i in by_id}
+            raise RpcError(4090,
+                           f'Коллизия именования: {dst} — код LM {", ".join(sorted(map(str, lms)))} '
+                           f'встречается у нескольких товаров. Проверьте дубли в заявке '
+                           f'(колонка A).')
         return {'rows': rows, 'skipped': skipped,
                 'xlsx': str(state.zayavka_path) if state.zayavka_path else None,
                 'items_count': len(items) - len(skipped)}
@@ -445,8 +586,9 @@ def h_exec(p):
         base = state.folder
         pairs = [{'src': str(base / r['src']), 'dst': str(base / r['dst'])}
                  for r in plan['rows']]
+        t0 = time.time()
         try:
-            log = execute_rename(pairs)
+            renamed_log = execute_rename(pairs)
         except RenameError as e:
             raise RpcError(4090, str(e))
         changed, locked, xlsx_msg = None, False, None
@@ -457,12 +599,14 @@ def h_exec(p):
                     {'org': 'photo production', 'photographer': 'Кирилл'})
             except XlsxLockedError as e:
                 locked, xlsx_msg = True, str(e)
-        entry = state.journal.add(log, plan['rows'], {
+        entry = state.journal.add(renamed_log, plan['rows'], {
             'path': str(state.zayavka_path) if state.zayavka_path else None,
             'changed': changed, 'locked': locked,
         })
+        log('rename_execute', session_id=p.get('_session'), renamed=len(renamed_log),
+            xlsx_locked=locked, elapsed_ms=round((time.time() - t0) * 1000))
         return {
-            'renamed': len(log),
+            'renamed': len(renamed_log),
             'xlsx': {'updated': sum(1 for c in (changed or []) if not c.get('added')),
                      'added': sum(1 for c in (changed or []) if c.get('added')),
                      'locked': locked, 'message': xlsx_msg},
@@ -477,11 +621,15 @@ def h_undo(p):
         if not e:
             raise RpcError(4004, 'Журнал пуст — нечего отменять')
         try:
-            n = undo_rename(e['files'])
+            undo_res = undo_rename(e['files'])
+            n = undo_res['restored']
         except RenameError as ex:
             state.journal.entries.append(e)
             state.journal._save()
             raise RpcError(4090, str(ex))
+        if undo_res['missing']:
+            log('undo_missing', session_id=p.get('_session'),
+                missing=undo_res['missing'][:10], count=len(undo_res['missing']))
         xlsx_done = None
         x = e.get('xlsx') or {}
         ch = x.get('changed')
@@ -502,12 +650,13 @@ def h_undo(p):
                 xlsx_done = {'error': str(ex)}
         if state.folder is not None:
             try:
-                res = scan_folder(state.folder, state.mode, preview_loader=_get_preview)
-                _enrich(res['items'])
-                state.items = res['items']
+                scan_res = scan_folder(state.folder, state.mode, preview_loader=_get_preview)
+                _enrich(scan_res['items'])
+                state.items = scan_res['items']
             except Exception:
                 pass
-        return {'restored': n, 'xlsx': xlsx_done, 'journal_id': e['id']}
+        return {'restored': n, 'missing': undo_res['missing'], 'xlsx': xlsx_done,
+                'journal_id': e['id']}
 
 
 @method('renamer.retry_xlsx')
@@ -548,11 +697,29 @@ def h_journal_clear(p):
 
 
 # --- files ---------------------------------------------------------------------
+@method('fs.is_dir')
+def h_is_dir(p):
+    """v3.3: для drag&drop — узнать, папка ли путь (без чтения содержимого)."""
+    try:
+        return {'is_dir': Path(str(p['path'])).expanduser().is_dir()}
+    except Exception:
+        return {'is_dir': False}
+
+
 @method('file.download')
 def h_dl(p):
+    """v3.3: выдаются ТОЛЬКО файлы внутри каталога данных sidecar
+    (защита от произвольного чтения файла через WebView)."""
     path = Path(p['path']).expanduser()
     if not path.is_file():
         raise RpcError(4004, 'Файл не найден')
+    try:
+        data_root = state.data_dir.resolve()
+        real = path.resolve()
+        if data_root not in real.parents and real.parent != data_root:
+            raise RpcError(4003, 'Файл вне каталога данных — выдача запрещена')
+    except (OSError, RuntimeError) as e:
+        raise RpcError(4003, f'Не удалось разрешить путь: {e}')
     if path.stat().st_size > 25 * 1024 * 1024:
         raise RpcError(4000, 'Файл больше 25 МБ — не отдаётся через RPC')
     return {'name': path.name, 'data_b64': base64.b64encode(path.read_bytes()).decode()}
@@ -561,30 +728,78 @@ def h_dl(p):
 # --------------------------------------------------------------------------- http
 @app.post('/rpc')
 async def rpc(request: Request):
+    session_id = request.headers.get('X-RRS-Session', None)
     try:
         body = await request.json()
     except Exception:
+        log('rpc_parse_error', level='error', session_id=session_id)
         return JSONResponse({'jsonrpc': '2.0', 'id': None,
                              'error': {'code': -32700, 'message': 'parse error'}})
     mid = body.get('id')
     m = str(body.get('method', ''))
     params = body.get('params') or {}
+    # session_id из заголовка подмешиваем в params (хендлеры читают p.get('_session'))
+    if session_id and isinstance(params, dict) and '_session' not in params:
+        params = {**params, '_session': session_id}
     fn = METHODS.get(m)
     if fn is None:
+        log('rpc_unknown_method', level='warn', session_id=session_id, method=m)
         return JSONResponse({'jsonrpc': '2.0', 'id': mid,
                              'error': {'code': -32601, 'message': f'method not found: {m}'}})
+    t0 = time.time()
     try:
-        return JSONResponse({'jsonrpc': '2.0', 'id': mid, 'result': fn(params)})
+        result = fn(params)
+        log('rpc', session_id=session_id, method=m,
+            result=summarize(result, 200),
+            elapsed_ms=round((time.time() - t0) * 1000))
+        return JSONResponse({'jsonrpc': '2.0', 'id': mid, 'result': result})
     except RpcError as e:
+        log('rpc_error', level='warn', session_id=session_id, method=m,
+            code=e.code, error=e.message,
+            elapsed_ms=round((time.time() - t0) * 1000))
         return JSONResponse({'jsonrpc': '2.0', 'id': mid,
                              'error': {'code': e.code, 'message': e.message}})
     except (FileNotFoundError, ValueError, KeyError) as e:
+        log('rpc_error', level='warn', session_id=session_id, method=m,
+            error=str(e)[:300], elapsed_ms=round((time.time() - t0) * 1000))
         return JSONResponse({'jsonrpc': '2.0', 'id': mid,
                              'error': {'code': 4000, 'message': str(e)}})
     except Exception as e:
         traceback.print_exc()
+        log('rpc_exception', level='error', session_id=session_id, method=m,
+            error=f'{type(e).__name__}: {e}',
+            stack=traceback.format_exc(limit=5),
+            elapsed_ms=round((time.time() - t0) * 1000))
         return JSONResponse({'jsonrpc': '2.0', 'id': mid,
                              'error': {'code': -32000, 'message': f'{type(e).__name__}: {e}'}})
+
+
+@app.post('/log')
+async def ui_log(request: Request):
+    """v3.3: приём логов фронтенда (батчами). Корреляция по session_id."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({'error': 'parse error'}, status_code=400)
+    lines = body.get('lines') or []
+    if not isinstance(lines, list) or len(lines) > 500:
+        return JSONResponse({'error': 'lines: список до 500 записей'}, status_code=400)
+    n = 0
+    for ln in lines:
+        if not isinstance(ln, dict):
+            continue
+        LOG.log(
+            str(ln.get('action', 'ui'))[:80],
+            level=str(ln.get('level', 'info'))[:8],
+            role='ui',
+            session_id=str(ln.get('session_id', ''))[:64],
+            **{k: v for k, v in ln.items() if k in ('params', 'result', 'error', 'extra', 'ui_state')}
+        )
+        n += 1
+    return {'ok': True, 'written': n}
+
+
+UPLOAD_MAX = 400 * 1024 * 1024  # v3.3: ограничение на файл (400 МБ)
 
 
 @app.post('/upload')
@@ -593,20 +808,40 @@ async def upload(file: UploadFile = File(...), dir: str = Form('')):
 
     v3.2.2: необязательный `dir` — подпапка uploads (имя папки съёмки),
     чтобы браузерный выбор папки сохранял структуру партии.
+    v3.3: санитизация + лимит размера (поток, без полной загрузки в RAM).
     """
-    name = os.path.basename(file.filename or 'upload.bin')
+    name = os.path.basename((file.filename or 'upload.bin').replace('\x00', ''))
+    if not name:
+        return JSONResponse({'error': 'Пустое имя файла'}, status_code=400)
     base = state.data_dir / 'uploads'
-    d = (dir or '').strip().replace('\\', '/')
+    d = (dir or '').strip().replace('\\', '/').replace('\x00', '')
     if d:
-        if (d in ('.', '..') or '/' in d or len(d) > 80
+        if (d in ('.', '..') or '/' in d or d.startswith('.') or len(d) > 80
                 or not re.fullmatch(r'[A-Za-z0-9._\- ]+', d)):
             return JSONResponse({'error': 'Недопустимое имя папки'}, status_code=400)
         base = base / d
     dest = base / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    data = await file.read()
-    dest.write_bytes(data)
-    return {'path': str(dest), 'name': name, 'size': len(data)}
+    size = 0
+    try:
+        with open(dest, 'wb') as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > UPLOAD_MAX:
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    return JSONResponse(
+                        {'error': f'Файл больше {UPLOAD_MAX // (1024*1024)} МБ'},
+                        status_code=413)
+                out.write(chunk)
+    except OSError as e:
+        dest.unlink(missing_ok=True)
+        return JSONResponse({'error': f'Не удалось сохранить файл: {e}'}, status_code=500)
+    log('upload', session_id=None, name=name, dir=d or None, size=size)
+    return {'path': str(dest), 'name': name, 'size': size}
 
 
 @app.get('/preview/{fh}')
@@ -623,7 +858,12 @@ def preview(fh: str, size: int = 320):
     key = (fh, size)
     thumb = THUMB_CACHE.get(key)
     if thumb is None:
-        thumb = make_jpeg_thumb(prev, size)
+        try:
+            thumb = make_jpeg_thumb(prev, size)
+        except Exception as e:
+            # v3.3: битое встроенное превью — 404 вместо 500/краха
+            log('preview_bad_jpeg', level='warn', file=str(path.name), error=str(e)[:200])
+            return JSONResponse({'error': 'bad embedded preview'}, status_code=404)
         if len(THUMB_CACHE) > 500:
             THUMB_CACHE.pop(next(iter(THUMB_CACHE)))
         THUMB_CACHE[key] = thumb
@@ -646,7 +886,34 @@ def _watchdog(timeout: float) -> None:
             os._exit(0)
 
 
+def _restore_last_session() -> None:
+    """v3.3: восстановить последнюю сессию (папка + заявка) после рестарта."""
+    p = state.data_dir / 'last_session.json'
+    try:
+        d = json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    folder = Path(d.get('folder') or '')
+    if not folder.is_dir():
+        log('restore_session', level='warn', error='папка не найдена', folder=d.get('folder'))
+        return
+    try:
+        if d.get('zayavka'):
+            zp = Path(d['zayavka'])
+            if zp.is_file():
+                _set_zayavka(zp)
+        res = scan_folder(folder, mode=d.get('mode', 'cv'), preview_loader=_get_preview)
+        _enrich(res['items'])
+        state.items = res['items']
+        state.folder = folder
+        state.mode = d.get('mode', 'cv')
+        log('restore_session', folder=folder.name, items=len(res['items']))
+    except Exception as e:
+        log('restore_session', level='error', error=f'{type(e).__name__}: {e}')
+
+
 def main() -> None:
+    global LOG, RUN_ID
     ap = argparse.ArgumentParser(description='RAW Renamer Studio sidecar')
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--port', type=int, default=0, help='0 = случайный свободный порт')
@@ -654,9 +921,10 @@ def main() -> None:
     ap.add_argument('--data-dir', default=None)
     ap.add_argument('--zayavka', default=None)
     ap.add_argument('--demo-folder', default=None)
-    ap.add_argument('--api-env', default='preprod', choices=['preprod', 'prod'])
-    ap.add_argument('--api-enabled', default='1', help='0 = отключить APIM')
-    ap.add_argument('--customer-id', default='60071799')
+    ap.add_argument('--api-env', default=None, choices=['preprod', 'prod'],
+                    help='по умолчанию — из settings.json')
+    ap.add_argument('--api-enabled', default=None, help='0/1; по умолчанию — из settings.json')
+    ap.add_argument('--customer-id', default=None)
     ap.add_argument('--watchdog', type=float, default=8.0,
                     help='секунд без heartbeat до exit(0); 0 = выключен')
     a = ap.parse_args()
@@ -672,12 +940,24 @@ def main() -> None:
     else:
         state.data_dir = Path.home() / '.cache' / 'raw-renamer'
     state.data_dir.mkdir(parents=True, exist_ok=True)
+
+    LOG = RrsLog(state.data_dir)
+    RUN_ID = LOG.run_id
+    log('sidecar_start', version=VERSION, data_dir=str(state.data_dir),
+        python=sys.version.split()[0], pid=os.getpid())
+
+    # --- настройки: CLI > settings.json > дефолты -----------------------------
+    s = load_settings()
+    api_env = a.api_env or s.get('apim_env', 'preprod')
+    api_enabled = (a.api_enabled == '1') if a.api_enabled is not None \
+        else bool(s.get('apim_enabled', True))
+    customer_id = a.customer_id or s.get('customer_id', '60071799')
     state.demo_dir = Path(a.demo_folder).expanduser().resolve() if a.demo_folder else None
-    state.lookup = Lookup(state.data_dir, env=a.api_env, customer_id=a.customer_id,
-                          enabled=a.api_enabled == '1')
-    state.api_env = a.api_env
-    state.api_enabled = a.api_enabled == '1'
-    state.customer_id = a.customer_id
+    state.lookup = Lookup(state.data_dir, env=api_env, customer_id=customer_id,
+                          enabled=api_enabled)
+    state.api_env = api_env
+    state.api_enabled = api_enabled
+    state.customer_id = customer_id
     state.journal = Journal(state.data_dir / '.lm_rename_journal.json')
     state.last_beat = time.time()
     if a.zayavka:
@@ -686,24 +966,41 @@ def main() -> None:
         except (FileNotFoundError, XlsxLockedError) as e:
             print(f'SIDECAR: заявка недоступна: {e}', file=sys.stderr, flush=True)
 
+    # v3.3: восстановление последней сессии (до READY — фронт сразу видит данные)
+    _restore_last_session()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((a.host, a.port))
     port = sock.getsockname()[1]
     sock.set_inheritable(True)
     state.port = port
-    if a.port_file:
-        pf = Path(a.port_file)
-        pf.parent.mkdir(parents=True, exist_ok=True)
-        pf.write_text(str(port))
-    print(json.dumps({'event': 'SIDECAR_READY', 'port': port, 'pid': os.getpid()},
-                     ensure_ascii=False), flush=True)
 
     if a.watchdog > 0:
         threading.Thread(target=_watchdog, args=(a.watchdog,), daemon=True).start()
 
+    # v3.3: READY объявляется ТОЛЬКО когда uvicorn реально принимает запросы
+    # (раньше порт-файл/READY писались до accept → первый RPC мог получить
+    # ConnectionRefused). Порт-файл пишется в тот же момент — dev-прокси
+    # гарантированно попадает в живой сервер.
     config = uvicorn.Config(app, host=a.host, port=port,
                             log_level='warning', access_log=False)
     server = uvicorn.Server(config)
+
+    def _announce():
+        while not server.started:
+            time.sleep(0.05)
+        if a.port_file:
+            pf = Path(a.port_file)
+            pf.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                pf.write_text(str(port))
+            except OSError as e:
+                print(f'SIDECAR: не удалось записать port-file: {e}', file=sys.stderr, flush=True)
+        print(json.dumps({'event': 'SIDECAR_READY', 'port': port, 'pid': os.getpid()},
+                         ensure_ascii=False), flush=True)
+        log('sidecar_ready', port=port)
+
+    threading.Thread(target=_announce, daemon=True).start()
     server.run(sockets=[sock])
 
 

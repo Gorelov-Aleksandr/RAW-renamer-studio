@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Check, AlertTriangle, XCircle, Sparkles } from 'lucide-react';
 import type { Item } from '../types';
 import { useSession } from '../store/useSession';
@@ -36,6 +36,7 @@ export const ProductCard = memo(function ProductCard({ item }: { item: Item }) {
   const activeId = useSession((s) => s.activeId);
   const hero = item.frames.find((f) => !f.is_label) ?? item.frames[0];
   const clean = item.frames.filter((f) => !f.is_label).length;
+  const [brokenPreview, setBrokenPreview] = useState(false);
 
   return (
     <div
@@ -51,12 +52,13 @@ export const ProductCard = memo(function ProductCard({ item }: { item: Item }) {
       )}
     >
       <div className="relative aspect-[4/3] bg-[#0F1015] border-b border-white/5">
-        {hero?.preview ? (
+        {hero?.preview && !brokenPreview ? (
           <img
             src={sc.previewUrl(hero.preview, 360)}
             alt=""
             loading="lazy"
             draggable={false}
+            onError={() => setBrokenPreview(true)}
             className="absolute inset-0 w-full h-full object-cover"
           />
         ) : (
@@ -77,10 +79,13 @@ export const ProductCard = memo(function ProductCard({ item }: { item: Item }) {
         )}
       </div>
       <div className="px-3 py-2.5">
-        <div className="font-mono font-semibold text-[13.5px] tabular-nums truncate">
+        <div
+          className="font-mono font-semibold text-[13.5px] tabular-nums truncate selectable"
+          title={item.lm_code ? `Скопировать артикул: ${item.lm_code}` : undefined}
+        >
           {item.lm_code ?? 'нет артикула'}
         </div>
-        <div className="font-mono text-[11px] text-tx-3 mt-0.5 tabular-nums truncate">
+        <div className="font-mono text-[11px] text-tx-3 mt-0.5 tabular-nums truncate selectable">
           {item.barcode ?? 'ШК не распознан · ввод: R'}
         </div>
         <div className="flex gap-1.5 mt-2 flex-wrap">
