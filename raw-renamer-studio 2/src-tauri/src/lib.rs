@@ -1,5 +1,6 @@
 mod sidecar;
 
+use tauri::Emitter;
 use tauri::Manager;
 
 /// v3.3 (D3): нативное меню macOS — «О программе», Настройки, Открыть папку,
