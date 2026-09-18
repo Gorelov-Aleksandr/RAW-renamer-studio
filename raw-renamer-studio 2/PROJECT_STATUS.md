@@ -1,0 +1,238 @@
+# RAW Renamer Studio — Состояние проекта и контекст для продолжения
+
+> **Зачем этот файл:** если диалог обрывается, передайте ЭТОТ файл в новый чат —
+> в нём всё, что нужно, чтобы продолжить работу. Обновляется по мере продвижения.
+> Единственный источник правды по СПЕЦИФИКАЦИИ — `docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md`
+> (VER 3.0, 1549 строк). По процессу и статусу — этот файл.
+
+**Дата последнего обновления: 2026-09-18 (МСК) — патч v3.1 (заявка/настройки/генератор)**
+
+---
+
+## 1. Что за проект и кто кто
+
+- **Продукт:** премиальное десктопное приложение каталогизации и пакетного
+  переименования RAW-снимков для предметных фотографов и операторов
+  **Леман ПРО / Leroy Merlin** (студия пользователя).
+- **Стек (жёстко по master §7):** Tauri v2 (Rust) · React 18 + TypeScript +
+  Tailwind CSS · Python FastAPI Sidecar (в release — PyInstaller onefile).
+- **Пользователь:** русскоязычный, работает на **macOS** (и хочет Windows-версию
+  позже). Не требует Linux-версию (прямо отказался).
+
+## 2. Инструкции пользователя (соблюдать всегда)
+
+1. **Сначала полностью отладить MAC-версию** (собирается на маке пользователя),
+   и только потом — Windows. «Чтобы если косяки будут, не пришлось переделывать
+   обе версии».
+2. Прототип (HTML) НЕ делается — сразу рабочая десктопная версия (прототип
+   отклонён пользователем; папка `prototype/` удалена).
+3. Не изобретать велосипед — работать строго по спецификации (master VER 3.0).
+4. Общаться на русском.
+5. Приложения/инструкции — в текстовых (.md) файлах (пользователь прикладывает
+   только текст).
+
+## 3. ТЕКУЩИЙ ЭТАП (читать в первую очередь при продолжении)
+
+**Этап: MAC-версия собирается, идёт наполнение функционалом (v3.1).**
+
+ХРОНИКА:
+1. Пользователь поставил Rust 1.98.1 (Apple Silicon), собрал проект.
+2. SIGABRT в did_finish_launching → переписан `sidecar.rs` (panic-free
+   супервизор + auto-restart + события + poll sidecar_url). **Сборка прошла.**
+3. Ошибка E0308: в Rust 1.98 `Child::id()` → `u32` (не Option) → поправлено.
+4. **НОВАЯ ЗАДАЧА (2026-09-18): «наполнить полноценно, а не как демо»** —
+   СДЕЛАНО (v3.1, патч-архив `patch-full-2026-09-18.zip`):
+   - заявка: сценарий «открыть .xlsx» (нативный диалог) + авто-подключение
+     сгенерированной заявки к сессии (fix «не загрузить таблицу»);
+   - генератор: УБРАНЫ поля фотограф/организация/дата (org='photo production'
+     фикс., дата в имени файла zayavka_ДД.ММ.ГГГГ.xlsx);
+   - «Настройки»: настоящее модалочное окно (Sidecar/APIM/Журнал/Хоткеи);
+     новые RPC: system.set_apim, renamer.journal_clear;
+   - «+» в Сессиях → нативный выбор папки.
+   - Всё проверено в песочнице: RPC-тесты (6/6 ok, generator: org/пустые
+     поля/имя с датой; set_apim; journal_clear; enrich) + tsc+vite без ошибок.
+   - Мастер-файл: раздел 16 (аддендум v3.1: инциденты/решения/изменения).
+5. ЧТО ДЕЛАЕТ ПОЛЬЗОВАТЕЛЬ: применить патч (PATCH_README.md в архиве) →
+   `bash scripts/build-macos.sh` → тест: Заявка (открыть/сгенерировать),
+   Настройки, и — самое главное — **ПЕРЕИМЕНОВАТЬ ВСЁ + UNDO**
+   (пользователь ещё не тестировал сам процесс переименовки).
+6. ДАЛЬШЕ (после проверки на маке): Windows-версия
+   (`scripts/build-windows-from-macos.sh`).
+
+ВНИМАНИЕ: пользователь просил патч ОТДЕЛЬНЫМ архивом с инструкцией —
+`patch-full-2026-09-18.zip` (PATCH_README.md + только изменённые файлы).
+Полный проект с патчем: `raw-renamer-studio.zip` (тоже пересобран).
+
+## 4. Что делать ПОСЛЕ мак-версии (не начинать раньше!)
+
+1. Windows-версия — **с того же мака** через кросс-компиляцию:
+   `./scripts/build-windows-from-macos.sh`
+   (mingw-w64 + nsis + wine; Windows Python 3.12 под Wine; PyInstaller;
+   `tauri build --target x86_64-pc-windows-gnu --bundles nsis`).
+   Запасной путь: sidecar.exe собрать на любой Windows-машине (3 команды в README)
+   → скрипт пропустит Wine-шаги (ищет `src-tauri/binaries/raw-renamer-sidecar-x86_64-pc-windows-gnu.exe`).
+   Или нативная сборка на Windows: `scripts/build-windows.ps1`.
+2. После отладки обеих — финальная полировка (если захотим).
+
+## 5. Что УЖЕ СДЕЛАНО и ПРОВЕРЕНО (не повторять)
+
+### 5.1 Python sidecar (`src-python/`, 9 модулей) — РАБОТАЕТ
+
+Проверено 16/16 функциональных RPC-тестов (реальные запросы, не заглушки):
+
+- `system.heartbeat` / `system.info` (версия, порт, движки, demo, кэш)
+- `session.open_folder` mode=cv: **6/6 этикеток распознаны** (этикетки в демо —
+  НАСТОЯЩИЕ нарисованные EAN-13), 22 кадра, все товары `status=ok`, lookup по
+  заявке (ШК→Код LM, название, строка Excel), source=`cv:zxing`
+- `session.apply_barcode` (сирота → ручной ШК → lm=89458028, строка 2)
+- `renamer.plan`: 22 строки; кресло → `89458028.CR2, _01, _02, _y` (главный
+  СТРОГО без суффикса); дрель → `_01.._03 + _y`; кастомный суффикс `_com`
+  заменяет номер позиции
+- `renamer.execute`: 22 файла переименованы, Excel L(12)/M(13) записаны
+  (кресло L=3 M=1 — L считает ракурсы БЕЗ `_y`), журнал создан
+- `renamer.undo`: имена и L/M (0/0) полностью восстановлены
+- `renamer.retry_xlsx`: written=6 (сценарий «Повторить» при блокировке Excel)
+- `renamer.journal`, `session.get`, `session.set_zayavka`
+- names-mode: имена `_M2A…` без ШК → 22 отдельных «сиротливых» товара (status=err);
+  имена по ШК (`4650101098817_y.CR2`, `…_01.CR2`) → 1 товар, план корректен
+- `zayavka.generate`: PIM CSV (UTF-16 LE BOM, tab) → xlsx 21 колонка;
+  `file.download` (b64, валидный xlsx); `/upload` (field `file`); `/preview` (JPEG)
+
+### 5.2 Фронтенд (`src/`) — СКОМПИЛИРОВАН
+
+`npm run build` (tsc --noEmit + vite build) — без ошибок. Bundle ~277KB JS.
+- Виртуализированная сетка (@tanstack/react-virtual), DnD ракурсов (dnd-kit)
+  с правкой суффиксов, модалки (план, ручной ШК с live-lookup, PIM-заявка),
+  лайтбокс, тосты (кнопки «Повторить»/«Отменить ⌘Z»), sidebar, toolbar, statusbar
+- Горячие клавиши: ⌘Z undo, ⌘K (заглушка), Space lightbox, R — ручной ШК
+- Дизайн-токены master §10; blur только в модалках/тостах
+- `lib/sidecar.ts`: JSON-RPC клиент, heartbeat 3 с, Tauri `sidecar://ready`
+
+### 5.3 Tauri v2 (`src-tauri/`) — написание завершено, НЕ КОМПИЛИРОВАЛСЯ (нет cargo в песочнице)
+
+- `src/sidecar.rs`: spawn sidecar (dev: python из исходников; release: бинарник
+  externalBin), парсинг SIDECAR_READY, событие `sidecar://ready`,
+  `CREATE_NO_WINDOW` на Windows, поиск бинарника по всем раскладкам Tauri
+  (Contents/MacOS/binaries, resources\binaries, рядом с exe)
+- `tauri.conf.json` (v2): devUrl localhost:5173, frontendDist ../dist,
+  externalBin `binaries/raw-renamer-sidecar`, bundle: app/dmg/nsis
+- Скрипты: `scripts/build-macos.sh` (нативный), `scripts/build-windows.ps1`
+  (нативный Windows), `scripts/build-windows-from-macos.sh` (кросс с Wine)
+- `src-python/sidecar.spec` — PyInstaller onefile, console=True, hiddenimports
+
+### 5.4 Демо-данные (`demo_batch/`) — сгенерированы
+
+`tools/make_demo_batch.py`: 22 «RAW» (`.CR2` = JPEG-контейнер, 6 товаров),
+первый кадр каждого товара — этикетка с валидным EAN-13 (рисованная,
+декодируется реальными движками); `export_pim_demo.csv` (UTF-16 LE BOM, tab);
+`zayavka_17.09.2026.xlsx` (собирается через тот же pim_builder — догфудинг).
+Фото товаров сгенерированы ИИ в `demo_batch/source/*.jpg` (chair/lamp/handle/
+drill/paint/faucet).
+
+**Демо-товары (LM / GTIN / фото / кадры):**
+89458028 / 4650101098817 / chair / [y, '', _01, _02]
+89458031 / 4650101098831 / lamp / [y, '', _01]
+89458102 / 4650101098909 / handle / [y, '', _01]
+89458044 / 4650101098855 / drill / [y, '', _01, _02, _03]
+89458047 / 4650101098862 / paint / [y, '', _01]
+89458053 / 4650101098879 / faucet / [y, '', _01, _02]
+(камера: `_M2A0801.CR2`… последовательно; GTIN = префикс 12 + контрольная)
+
+## 6. Что ЧИНили по ходу (чтобы не наступать снова)
+
+1. **zxing-cpp 3.x API**: новые версии дали `read_barcodes` (старые —
+   `decode`/`decode_multi`). `scanner.py` поддерживает оба.
+2. **OpenCV 5.0**: `barcode_BarcodeDetector.detectAndDecode` в 5.x находит
+   область, но не декодирует (слабый декодер) → сканер честно падает на ZXing
+   (контур 2). Поддержаны сигнатуры 4.x и 5.x.
+3. **4 GTIN из демо-данных имели неверные контрольные цифры** (унаследованы из
+   прототипа) — ZXing их честно отклонял. GTIN теперь вычисляются из 12-значных
+   префиксов в `make_demo_batch.py` (LM-коды не тронуты).
+4. `/upload`: сервер ждал поле `f`, фронт шлёт `file` — унифицировано на `file`.
+5. names-mode: все неопознанные файлы сливались в 1 товар → теперь каждый =
+   отдельный «сиротливый» товар.
+6. **Release-режим**: data-dir по платформам (Win: `%LOCALAPPDATA%\RAW-Renamer-Studio`,
+   macOS: `~/Library/Application Support/RAW Renamer Studio`, Linux: `~/.cache/raw-renamer`).
+7. Windows: `CREATE_NO_WINDOW` при spawn sidecar (иначе чёрное консольное окно).
+8. Cargo.toml: убран `strip = true` (падает на Windows без утилиты strip).
+9. Vite: `allowedHosts: true` (иначе preview-хост хостинга 403).
+10. Опечатка `tauriii::AppHandle` в sidecar.rs — исправлено.
+11. **SIGABRT при старте release на macOS (did_finish_launching)**: старые
+    `spawn().expect()`, `panic!` в release-поиске бинарника, гонка
+    `sidecar://ready` (событие раньше подписки) → переписан `sidecar.rs`
+    (супервизор без паник + auto-restart + события dead/error + `sidecar_url`
+    query-фолбэк во фронтенде).
+12. **Rust 1.98: `Child::id()` теперь возвращает `u32`** (не `Option<u32>` —
+    вариант убран из std). Код под это поправлен (2026-09-17 16:10).
+    Требование: rustup stable 1.9x; на старых тулчейнах `rustup update` нужен.
+
+## 7. Ключевые файлы (навигация)
+
+```
+raw-renamer-studio/
+├── docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md   ← СПЕЦИФИКАЦИЯ (источник правды)
+├── PROJECT_STATUS.md                            ← ЭТОТ файл (статус/продолжение)
+├── README.md                                    ← старт, протокол, сборка
+├── PROJECT_STATUS.md обновлять при каждом значимом шаге!
+├── src-python/          server.py (FastAPI, RPC, /preview, /upload, watchdog)
+│                        scanner.py (OpenCV→ZXing→PyZBar), session.py (скан/план),
+│                        renamer.py (2-fase rename + undo-журнал), excel_worker.py
+│                        (A/D чтение, L/M запись, lock), lookup.py (заявка→sqlite→APIM),
+│                        pim_builder.py (PIM→xlsx 21 кол.), raw_engine.py (JPEG из RAW),
+│                        requirements.txt, sidecar.spec (PyInstaller)
+├── src/               React: App.tsx, store/useSession.ts (Zustand),
+│                        lib/sidecar.ts (JSON-RPC+heartbeat), components/* (11 шт.)
+├── src-tauri/         Cargo.toml, tauri.conf.json, src/{main,lib,sidecar}.rs,
+│                        icons/icon.png, .cargo/config.toml (кросс линкер,
+│                        создаётся скриптом кросс-сборки)
+├── scripts/           build-macos.sh, build-windows.ps1,
+│                        build-windows-from-macos.sh
+├── tools/make_demo_batch.py
+├── demo_batch/        shoot_2026-09-16/ (22 .CR2), zayavka_17.09.2026.xlsx,
+│                        export_pim_demo.csv, source/*.jpg
+├── sidecar-proxy.ts, vite.config.ts, tailwind.config.ts, tsconfig.json,
+│   package.json, index.html
+└── .sidecar/port      динамический порт sidecar (dev-прокси vite)
+```
+
+## 8. Как запустить в песочнице/бrowsере (если нужен превью)
+
+```bash
+cd /home/user/raw-renamer-studio
+pip install -r src-python/requirements.txt
+python3 tools/make_demo_batch.py
+# sidecar (фоновым процессом; watchdog 0 — чтобы пережил закрытие превью):
+python3 src-python/server.py --port 0 --port-file .sidecar/port --data-dir .data \
+  --zayavka demo_batch/zayavka_17.09.2026.xlsx --demo-folder demo_batch --watchdog 0
+# фронтенд (фоновым):
+npm install && npm run dev          # 0.0.0.0:5173, прокси /rpc и /preview
+```
+Проверка: `curl -X POST http://localhost:5173/rpc -d '{"jsonrpc":"2.0","id":1,"method":"system.heartbeat","params":{}}'`.
+В новом чате процессы из этой сессии, скорее всего, мертвы — перезапустить по схеме выше.
+
+## 9. Протокол и правила (коротко; полностью — в master)
+
+- Sidecar: порт 0 (случайный), ПЕРВАЯ строка stdout:
+  `{"event": "SIDECAR_READY", "port": N, "pid": M}`; heartbeat 3 с;
+  >8 с без heartbeat → exit(0).
+- Превью: ТОЛЬКО встроенный JPEG (FFD8…FFD9), без демозаиска.
+- Excel: A(1)=Код LM, D(4)=GTIN; запись L(12)=ракурсы без `_y`, M(13)=1/0;
+  блокировка Excel → «Закройте файл в Excel и нажмите «Повторить»».
+- Именование: `<арт>_y` · `<арт>` (главный, без суффикса) · `_01…` ·
+  кастом `_06/_com/_pack/_ins/_tag`.
+- Сортировка кадров: натуральные числа (regex `\d+`).
+- Коллизии: проверка до rename; циклы через `.tmp_rename`; undo-журнал
+  `.lm_rename_journal.json` (откат и имён, и L/M).
+- Lookup: Заявка (A/D) → SQLite (barcodes_cache) → APIM v3 (preprod,
+  customerId 60071799; недоступность API — не ошибка).
+- Дизайн-токены: bg #0D0E12 / panel #14151A / surface #1A1C23 / accent #7C6CF0 /
+  ok #3FBE84 / warn #E8A23C / danger #E5484D; Inter + JetBrains Mono.
+
+## 10. Чек-лист для нового чата (с чего начать)
+
+1. Прочитать этот файл + `docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md`.
+2. Спросить пользователя: **какой лог сборки мак-версии?** (или что случилось).
+3. Чинить по логу (Rust → `src-tauri/`, PyInstaller → `sidecar.spec`,
+   sidecar → `src-python/`, UI → `src/`).
+4. После успешной мак-сборки — переходить к Windows (§4).
+5. Обновлять этот файл после каждого значимого шага (§3 — текущий этап!).

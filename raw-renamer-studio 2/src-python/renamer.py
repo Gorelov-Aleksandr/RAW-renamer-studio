@@ -1,0 +1,138 @@
+"""RAW Renamer Studio — Safe Two-Phase Rename + Undo Journal (master §13.5).
+
+Правила:
+  * сначала проверка коллизий (dst уже существует — ошибка, кроме случая,
+    когда dst сам является src — цикл 1→2, 2→1);
+  * при циклических переименованиях — двухфазный переход через промежуточный
+    суффикс .tmp_rename;
+  * журнал .lm_rename_journal.json — 1-Click Undo (файлы + ячейки L/M).
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+
+TMP = '.tmp_rename'
+
+
+class RenameError(Exception):
+    pass
+
+
+def execute(pairs: list[dict]) -> list[dict]:
+    """pairs: [{'src': str|Path, 'dst': str|Path}].
+
+    Возвращает лог [{'from','to'}] (для журнала). Бросает RenameError.
+    """
+    if not pairs:
+        return []
+    srcs = [Path(p['src']) for p in pairs]
+    dsts = [Path(p['dst']) for p in pairs]
+    for s in srcs:
+        if not s.is_file():
+            raise RenameError(f'Файл не найден: {s.name}')
+
+    src_set = {s.resolve() for s in srcs}
+    for d in dsts:
+        if d.exists() and d.resolve() not in src_set:
+            raise RenameError(f'Коллизия: {d.name} уже существует')
+
+    if not (src_set & {d.resolve() for d in dsts}):
+        # прямая фаза: циклов нет, коллизий нет
+        for s, d in zip(srcs, dsts):
+            if d.exists():
+                raise RenameError(f'Коллизия: {d.name}')
+            s.rename(d)
+        return [{'from': str(s), 'to': str(d)} for s, d in zip(srcs, dsts)]
+
+    # двухфазный переход (циклические имена): всё → .tmp_rename → финальные
+    tmps: list[tuple[Path, Path, Path]] = []
+    for s, d in zip(srcs, dsts):
+        t = s.with_name(s.name + TMP)
+        if t.exists():
+            raise RenameError(f'Остаточный временный файл: {t.name}')
+        s.rename(t)
+        tmps.append((s, t, d))
+    done: list[tuple[Path, Path, Path]] = []
+    try:
+        for s, t, d in tmps:
+            if d.exists():
+                raise RenameError(f'Коллизия: {d.name}')
+            t.rename(d)
+            done.append((s, t, d))
+    except Exception as e:
+        # откат завершённой второй фазы — лучшие усилия
+        for s, _t, d in done:
+            if d.exists():
+                try:
+                    d.rename(s)
+                except OSError:
+                    pass
+        if isinstance(e, RenameError):
+            raise
+        raise RenameError(f'Не удалось завершить вторую фазу: {e}')
+    return [{'from': str(s), 'to': str(d)} for s, d in zip(srcs, dsts)]
+
+
+def undo_rename(files: list[dict]) -> int:
+    """Откат: to → from (в обратном порядке), двухфазно-безопасно."""
+    pairs = []
+    for f in reversed(files):
+        s, d = Path(f['to']), Path(f['from'])
+        if s.is_file():
+            pairs.append({'src': str(s), 'dst': str(d)})
+    if not pairs:
+        return 0
+    return len(execute(pairs))
+
+
+class Journal:
+    """Журнал операций .lm_rename_journal.json (атомарная запись)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.entries: list[dict] = []
+        if self.path.exists():
+            try:
+                self.entries = json.loads(self.path.read_text(encoding='utf-8'))
+            except Exception:
+                self.entries = []
+
+    def add(self, files: list[dict], plan: list[dict], xlsx: Optional[dict]) -> dict:
+        e = {
+            'id': uuid.uuid4().hex[:12],
+            'ts': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'files': files,
+            'plan': plan,
+            'xlsx': xlsx,
+        }
+        self.entries.append(e)
+        self._save()
+        return e
+
+    def last(self) -> Optional[dict]:
+        return self.entries[-1] if self.entries else None
+
+    def pop(self) -> Optional[dict]:
+        if not self.entries:
+            return None
+        e = self.entries.pop()
+        self._save()
+        return e
+
+    def clear(self) -> int:
+        """Полная очистка журнала (v3.1, «Настройки»). Возвращает число удалённых."""
+        n = len(self.entries)
+        self.entries = []
+        self._save()
+        return n
+
+    def _save(self) -> None:
+        tmp = self.path.with_name(self.path.name + '.tmp')
+        tmp.write_text(json.dumps(self.entries, ensure_ascii=False, indent=1), encoding='utf-8')
+        os.replace(tmp, self.path)
