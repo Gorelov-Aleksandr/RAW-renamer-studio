@@ -25,6 +25,7 @@ export default function ZayavkaModal() {
   const closeModals = useSession((s) => s.closeModals);
   const info = useSession((s) => s.info);
   const session = useSession((s) => s.session);
+  const online = useSession((s) => s.online);
   const toast = useSession((s) => s.toast);
   const loadZayavka = useSession((s) => s.loadZayavka);
   const [status, setStatus] = useState('');
@@ -35,6 +36,10 @@ export default function ZayavkaModal() {
   const xlsxRef = useRef<HTMLInputElement>(null);
 
   const pickXlsx = async () => {
+    if (!online) {
+      toast('warn', 'Sidecar офлайн', 'Загрузка заявки недоступна — запустите Python sidecar');
+      return;
+    }
     // Tauri: нативный выбор файла
     try {
       if (sc.isTauri()) {
@@ -53,7 +58,22 @@ export default function ZayavkaModal() {
     } catch {
       /* нет tauri — браузерный ввод ниже */
     }
-    xlsxRef.current?.click();
+    // BUG-002: браузер — нативный <input type=file>. Стратегия «двойной
+    // кликабельный путь»: сначала скрытый input, fallback — временный input.
+    if (xlsxRef.current) {
+      xlsxRef.current.click();
+      return;
+    }
+    const tmp = document.createElement('input');
+    tmp.type = 'file';
+    tmp.accept = '.xlsx';
+    tmp.onchange = () => {
+      const f = tmp.files?.[0];
+      if (f) void onXlsxFile(f);
+    };
+    document.body.appendChild(tmp);
+    tmp.click();
+    window.setTimeout(() => tmp.remove(), 60000);
   };
 
   const onXlsxFile = async (file: File) => {
@@ -179,6 +199,17 @@ export default function ZayavkaModal() {
         </div>
 
         <div className="p-5 overflow-y-auto flex flex-col gap-4 flex-1">
+          {/* BUG-006: явный офлайн-баннер вместо тостов-ошибок на каждом действии */}
+          {!online && (
+            <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg bg-warn/10 border border-warn/30 text-[12.5px] text-tx-1">
+              <span className="w-2 h-2 rounded-full bg-warn flex-shrink-0" />
+              <span>
+                <b>Sidecar офлайн.</b> Загрузка и генерация заявки недоступны —
+                запустите Python sidecar (статус — в шапке приложения).
+              </span>
+            </div>
+          )}
+
           {/* Статус подключения */}
           <div className="flex items-center gap-3">
             <div
@@ -201,8 +232,12 @@ export default function ZayavkaModal() {
             {zayName && (
               <button
                 onClick={() => void useSession.getState().refreshAngles()}
-                className="h-[38px] px-3 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-1.5 flex-shrink-0"
-                title="Обновить количество ракурсов в заявке на основе реальных файлов"
+                disabled={!online}
+                className={cx(
+                  'h-[38px] px-3 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-1.5 flex-shrink-0',
+                  !online && 'opacity-40 cursor-not-allowed',
+                )}
+                title={online ? 'Обновить количество ракурсов в заявке на основе реальных файлов' : 'Sidecar офлайн — недоступно'}
               >
                 <RefreshCw size={14} className="text-accent-text" />
                 Обновить ракурсы
@@ -232,7 +267,12 @@ export default function ZayavkaModal() {
             />
             <button
               onClick={() => void pickXlsx()}
-              className="h-9 px-4 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12.5px] font-semibold hover:bg-elevated inline-flex items-center gap-2 self-start"
+              disabled={!online}
+              className={cx(
+                'h-9 px-4 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12.5px] font-semibold hover:bg-elevated inline-flex items-center gap-2 self-start',
+                !online && 'opacity-40 cursor-not-allowed',
+              )}
+              title={online ? 'Выбрать .xlsx с системы (нативный диалог)' : 'Sidecar офлайн — недоступно'}
             >
               <FolderUp size={15} className="text-accent-text" />
               Выбрать файл заявки…
@@ -244,22 +284,55 @@ export default function ZayavkaModal() {
             <div className="text-[12px] font-bold tracking-wide text-tx-2 uppercase">
               B · Сгенерировать из выгрузки PIM (CSV)
             </div>
+            {/* BUG-003: зона Drag&Drop + клик — работают в браузере и Tauri;
+                при офлайне sidecar — блокируется с подсказкой */}
             <div
-              onClick={() => csvRef.current?.click()}
+              role="button"
+              aria-disabled={!online}
+              onClick={() => {
+                if (!online) {
+                  toast('warn', 'Sidecar офлайн', 'Загрузка CSV недоступна — запустите Python sidecar');
+                  return;
+                }
+                if (csvRef.current) {
+                  csvRef.current.click();
+                  return;
+                }
+                const tmp = document.createElement('input');
+                tmp.type = 'file';
+                tmp.accept = '.csv,.tsv,.txt';
+                tmp.onchange = () => {
+                  const f = tmp.files?.[0];
+                  if (f) void onCsvFile(f);
+                };
+                document.body.appendChild(tmp);
+                tmp.click();
+                window.setTimeout(() => tmp.remove(), 60000);
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                if (online) setDrag(true);
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
-                setDrag(true);
+                e.dataTransfer.dropEffect = online ? 'copy' : 'none';
+                if (online) setDrag(true);
               }}
               onDragLeave={() => setDrag(false)}
               onDrop={(e) => {
                 e.preventDefault();
                 setDrag(false);
+                if (!online) {
+                  toast('warn', 'Sidecar офлайн', 'Загрузка CSV недоступна — запустите Python sidecar');
+                  return;
+                }
                 const f = e.dataTransfer.files?.[0];
                 if (f) void onCsvFile(f);
               }}
               className={cx(
-                'border-2 border-dashed rounded-lg px-6 py-5 text-center cursor-pointer transition-colors bg-surface',
-                drag ? 'border-accent' : 'border-white/15 hover:border-white/25',
+                'border-2 border-dashed rounded-lg px-6 py-5 text-center transition-colors bg-surface',
+                online ? 'cursor-pointer' : 'cursor-not-allowed opacity-50',
+                drag ? 'border-accent bg-accent/5' : 'border-white/15 hover:border-white/25',
               )}
             >
               <input
@@ -278,15 +351,22 @@ export default function ZayavkaModal() {
                 Перетащите export_*.csv или кликните для выбора
               </div>
               <div className="text-[11.5px] text-tx-3 mt-1">
-                UTF-16 LE (PIM) / UTF-8 · разделители Tab и «;» · автодетект полей
+                Кодировки UTF-16 LE/BE · UTF-8 · cp1251 (автодетект) · разделители Tab, «;», «,»
               </div>
               {info?.demo && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (!online) {
+                      toast('warn', 'Sidecar офлайн', 'Демо-выгрузка недоступна — запустите Python sidecar');
+                      return;
+                    }
                     void generate(info.demo!.pim);
                   }}
-                  className="mt-3 h-8 px-4 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-2"
+                  className={cx(
+                    'mt-3 h-8 px-4 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12px] font-semibold hover:bg-elevated inline-flex items-center gap-2',
+                    !online && 'opacity-40 cursor-not-allowed',
+                  )}
                 >
                   Загрузить демо-выгрузку PIM (6 товаров)
                 </button>
@@ -354,7 +434,11 @@ export default function ZayavkaModal() {
             {gen && !sc.isTauri() && (
               <button
                 onClick={() => void download()}
-                className="h-9 px-4 rounded-lg bg-accent-fill hover:bg-[#6A57E2] text-white text-[12.5px] font-bold flex items-center gap-2"
+                disabled={!online}
+                className={cx(
+                  'h-9 px-4 rounded-lg bg-accent-fill hover:bg-[#6A57E2] text-white text-[12.5px] font-bold flex items-center gap-2',
+                  !online && 'opacity-40 cursor-not-allowed',
+                )}
               >
                 <Download size={14} />
                 Скачать заявку (.xlsx)

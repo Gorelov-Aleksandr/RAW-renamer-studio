@@ -4,33 +4,10 @@ import {
   CalendarDays, FileSpreadsheet, FolderOpen, Camera, History, FileText,
   Database, Undo2, Settings, Plus, PanelLeftClose, Loader2,
 } from 'lucide-react';
-import { useSession, errMsg } from '../store/useSession';
-import * as sc from '../lib/sidecar';
+import { useSession } from '../store/useSession';
+import { pickFolder, type PickProgress } from '../lib/pickFolder';
+import { showJournalSummary } from '../lib/ops';
 import { cx } from '../lib/cx';
-
-/** Нативный выбор папки в Tauri; в браузере — подсказка. */
-export async function pickFolder(): Promise<void> {
-  try {
-    const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
-    if (w.__TAURI_INTERNALS__) {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const dir = await open({ directory: true, multiple: false, title: 'Папка с RAW-файлами съёмки' });
-      if (typeof dir === 'string') {
-        void useSession.getState().openFolder(dir);
-      }
-      return;
-    }
-  } catch {
-    /* нет tauri */
-  }
-  useSession
-    .getState()
-    .toast(
-      'warn',
-      'Десктопный режим',
-      'Нативный выбор папки доступен в десктопной сборке (Tauri). В браузере — «Демо-партия».',
-    );
-}
 
 function SideLabel({ children }: { children: ReactNode }) {
   return (
@@ -43,10 +20,14 @@ function SideLabel({ children }: { children: ReactNode }) {
 const itemCls =
   'flex items-center gap-2.5 w-full px-2 py-[7px] rounded-md text-[13px] text-tx-2 hover:bg-surface-hover hover:text-tx-1 transition-colors text-left';
 
+const OFFLINE_TITLE = 'Sidecar офлайн — операция недоступна';
+
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const [upload, setUpload] = useState<PickProgress | null>(null);
   const session = useSession((s) => s.session);
   const info = useSession((s) => s.info);
+  const online = useSession((s) => s.online);
   const openDemo = useSession((s) => s.openDemo);
   const busy = useSession((s) => s.busy);
   const toast = useSession((s) => s.toast);
@@ -54,27 +35,24 @@ export default function Sidebar() {
   const setModal = useSession((s) => s.setModal);
 
   const showJournal = async () => {
-    try {
-      const r = await sc.rpc<{
-        path: string;
-        entries: { id: string; ts: string; files: { from: string; to: string }[] }[];
-      }>('renamer.journal', {});
-      const last = r.entries[r.entries.length - 1];
-      toast(
-        'info',
-        'Журнал операций',
-        last
-          ? `${r.entries.length} в журнале · последняя: ${last.ts} (${last.files.length} файлов)`
-          : `Журнал пуст · ${r.path}`,
-      );
-    } catch (e) {
-      toast('err', 'Ошибка', errMsg(e));
-    }
+    // BUG-006: когда sidecar онлайн — реальные данные из renamer.journal
+    await showJournalSummary();
+  };
+
+  const newBatch = () => {
+    // BUG-001/BUG-005: Tauri — нативный проводник; браузер — выбор папки
+    // + загрузка RAW в sidecar + открытие сессии
+    void pickFolder({
+      onProgress: (p) => setUpload(p),
+      onDone: () => setUpload(null),
+    });
   };
 
   const folderName = session?.folder
     ? session.folder.split(/[\\/]/).filter(Boolean).pop() ?? ''
     : '';
+
+  const offCls = !online ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
 
   return (
     <aside
@@ -87,9 +65,13 @@ export default function Sidebar() {
         <SideLabel>
           Сессии
           <button
-            onClick={() => void pickFolder()}
-            className="w-5 h-5 grid place-items-center rounded hover:bg-elevated text-tx-3 hover:text-tx-1"
-            title="Новая партия"
+            onClick={newBatch}
+            disabled={!online}
+            title={online ? 'Новая партия: выбрать папку с RAW-файлами' : OFFLINE_TITLE}
+            className={cx(
+              'w-5 h-5 grid place-items-center rounded hover:bg-elevated text-tx-3 hover:text-tx-1',
+              !online && 'opacity-40 cursor-not-allowed',
+            )}
           >
             <Plus size={13} />
           </button>
@@ -108,7 +90,7 @@ export default function Sidebar() {
             </span>
           </button>
         ) : (
-          <button className={cx(itemCls, 'text-tx-3')}>
+          <button className={cx(itemCls, 'text-tx-3')} onClick={newBatch}>
             <CalendarDays size={16} className="flex-shrink-0" />
             Партия не открыта
           </button>
@@ -125,18 +107,26 @@ export default function Sidebar() {
             PIM
           </span>
         </button>
-        <button className={itemCls} onClick={() => void pickFolder()}>
+        <button className={cx(itemCls, offCls)} onClick={newBatch} disabled={!online} title={online ? 'Выбрать папку с RAW-файлами съёмки' : OFFLINE_TITLE}>
           <FolderOpen size={16} className="flex-shrink-0" />
           Открыть папку…
         </button>
         {info?.demo && (
-          <button className={itemCls} onClick={() => void openDemo()}>
+          <button className={cx(itemCls, offCls)} onClick={() => void openDemo()} disabled={!online} title={online ? undefined : OFFLINE_TITLE}>
             <Camera size={16} className="flex-shrink-0" />
             Демо-партия
             <span className="ml-auto text-[10px] font-mono text-tx-3">6 товаров</span>
           </button>
         )}
-        {busy && (
+        {upload && (
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-tx-3">
+            <Loader2 size={13} className="animate-spin" />
+            <span className="truncate">
+              Загрузка RAW {upload.done}/{upload.total}
+            </span>
+          </div>
+        )}
+        {!upload && busy && (
           <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-tx-3">
             <Loader2 size={13} className="animate-spin" />
             обработка…
@@ -144,12 +134,18 @@ export default function Sidebar() {
         )}
 
         <SideLabel>Журнал</SideLabel>
-        <button className={itemCls} onClick={() => void showJournal()}>
+        <button className={cx(itemCls, offCls)} onClick={showJournal} disabled={!online} title={online ? 'Сводка по журналу операций' : OFFLINE_TITLE}>
           <History size={16} className="flex-shrink-0" />
           Операции
         </button>
         <button
-          className={itemCls}
+          className={cx(itemCls, offCls)}
+          disabled={!online}
+          title={
+            online
+              ? 'Обратная запись: L (12) — ракурсы, M (13) — флаг _y после именования'
+              : OFFLINE_TITLE
+          }
           onClick={() =>
             toast(
               'info',
@@ -162,7 +158,9 @@ export default function Sidebar() {
           Журнал Excel
         </button>
         <button
-          className={itemCls}
+          className={cx(itemCls, offCls)}
+          disabled={!online}
+          title={online ? undefined : OFFLINE_TITLE}
           onClick={() =>
             toast(
               'info',
@@ -174,7 +172,7 @@ export default function Sidebar() {
           <Database size={16} className="flex-shrink-0" />
           Кэш ШК
         </button>
-        <button className={itemCls} onClick={() => void undoLast()}>
+        <button className={cx(itemCls, offCls)} onClick={() => void undoLast()} disabled={!online} title={online ? 'Отменить последнее переименование (⌘Z)' : OFFLINE_TITLE}>
           <Undo2 size={16} className="flex-shrink-0" />
           Откат (Undo)
         </button>

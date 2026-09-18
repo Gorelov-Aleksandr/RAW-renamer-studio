@@ -59,9 +59,13 @@ export async function rpc<T = unknown>(
 export const previewUrl = (hash: string | null | undefined, size = 320): string =>
   hash ? `${baseUrl}/preview/${hash}?size=${size}` : '';
 
-export function uploadFile(file: File): Promise<{ path: string; name: string; size: number }> {
+export function uploadFile(
+  file: File,
+  dir?: string,
+): Promise<{ path: string; name: string; size: number }> {
   const fd = new FormData();
   fd.append('file', file);
+  if (dir) fd.append('dir', dir);
   return fetch(baseUrl + '/upload', { method: 'POST', body: fd }).then(async (res) => {
     if (!res.ok) throw new SidecarError(`HTTP ${res.status} при загрузке файла`, -1);
     return (await res.json()) as { path: string; name: string; size: number };

@@ -3,8 +3,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Camera, FolderOpen } from 'lucide-react';
 import { useSession } from '../store/useSession';
 import { ProductCard } from './ProductCard';
-import { pickFolder } from './Sidebar';
-import { Logo } from '../App';
+import { pickFolder } from '../lib/pickFolder';
+import { Logo } from './Logo';
 
 /**
  * Виртуализированная сетка товаров (@tanstack/react-virtual, master §7):

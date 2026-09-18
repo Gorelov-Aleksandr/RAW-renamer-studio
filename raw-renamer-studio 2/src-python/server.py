@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import uvicorn
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
@@ -397,7 +397,12 @@ def h_zay(p):
             out = out / f'zayavka_{date}.xlsx'
     else:
         out = state.data_dir / f'zayavka_{date}.xlsx'
-    rows = read_pim(csv_path)
+    try:
+        rows = read_pim(csv_path)
+    except ValueError as e:
+        raise RpcError(4000, str(e))
+    except Exception as e:
+        raise RpcError(4000, f'Ошибка чтения CSV: {type(e).__name__}: {e}')
     if not rows:
         raise RpcError(4004, 'Товары не распознаны — проверьте заголовки экспорта PIM')
     constants = {'org': 'photo production'}
@@ -583,9 +588,21 @@ async def rpc(request: Request):
 
 
 @app.post('/upload')
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), dir: str = Form('')):
+    """Приём файла в data-dir/uploads[/<dir>].
+
+    v3.2.2: необязательный `dir` — подпапка uploads (имя папки съёмки),
+    чтобы браузерный выбор папки сохранял структуру партии.
+    """
     name = os.path.basename(file.filename or 'upload.bin')
-    dest = state.data_dir / 'uploads' / name
+    base = state.data_dir / 'uploads'
+    d = (dir or '').strip().replace('\\', '/')
+    if d:
+        if (d in ('.', '..') or '/' in d or len(d) > 80
+                or not re.fullmatch(r'[A-Za-z0-9._\- ]+', d)):
+            return JSONResponse({'error': 'Недопустимое имя папки'}, status_code=400)
+        base = base / d
+    dest = base / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     data = await file.read()
     dest.write_bytes(data)

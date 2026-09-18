@@ -5,7 +5,7 @@
 > Единственный источник правды по СПЕЦИФИКАЦИИ — `docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md`
 > (VER 3.0, 1549 строк). По процессу и статусу — этот файл.
 
-**Дата последнего обновления: 2026-09-18 (МСК) — патч v3.1 (заявка/настройки/генератор)**
+**Дата последнего обновления: 2026-09-18 (МСК) — багфикс v3.2.2 (BUG-001…BUG-008, см. BUGS_FIXED.md)**
 
 ---
 
@@ -33,9 +33,26 @@
 
 ## 3. ТЕКУЩИЙ ЭТАП (читать в первую очередь при продолжении)
 
-**Этап: MAC-версия собирается, идёт наполнение функционалом (v3.1).**
+**Этап: v3.2.2 — багфикс по отчёту QA (BUG-001…BUG-008) готов к проверке.**
 
 ХРОНИКА:
+0. **БАГФИКС QA (2026-09-18) — СДЕЛАНО (v3.2.2, см. BUGS_FIXED.md):**
+   - BUG-004: переписан детект кодировки CSV (UTF-16 LE/BE ±BOM, UTF-8 ±BOM,
+     cp1251) — корень «The string did not match the expected pattern»;
+     информативные ошибки парсинга (кодировка/разделитель/столбцы).
+   - BUG-001/005: «+»/«Открыть папку…» в браузере — выбор папки
+     (showDirectoryPicker / webkitdirectory) + загрузка RAW в sidecar
+     (`POST /upload` новое поле `dir`) → открытие сессии; Tauri — нативный диалог.
+   - BUG-006: при SIDECAR OFFLINE все RPC-кнопки блокируются (tooltip)
+     вместо тостов «Sidecar недоступен»; ⌘Z в офлайне — info, не error.
+   - BUG-007: меню ⋮ — выпадающее (Справка/Настройки/О приложении, 2 новых окна).
+   - BUG-008: ⌘K — командная палитра (поиск, 10 действий, ↑↓/Enter/Esc).
+   - BUG-002/003: file-picker заявки с fallback-инпутом; DnD CSV с dropEffect.
+   - Проверено E2E: upload+open_folder (22 файла→6 товаров, CV 6/6),
+     zayavka.generate (7 кодировок/разделителей), rename+undo, tsc+vite build.
+   - Файлы: BUGS_FIXED.md (отчёт), src/lib/pickFolder.ts, src/lib/ops.ts,
+     components/{AppMenu,CommandPalette,HelpModal,AboutModal,Logo}.tsx (новые).
+1. Пользователь поставил Rust 1.98.1 (Apple Silicon), собрал проект.
 1. Пользователь поставил Rust 1.98.1 (Apple Silicon), собрал проект.
 2. SIGABRT в did_finish_launching → переписан `sidecar.rs` (panic-free
    супервизор + auto-restart + события + poll sidecar_url). **Сборка прошла.**
@@ -104,7 +121,7 @@
 - Виртуализированная сетка (@tanstack/react-virtual), DnD ракурсов (dnd-kit)
   с правкой суффиксов, модалки (план, ручной ШК с live-lookup, PIM-заявка),
   лайтбокс, тосты (кнопки «Повторить»/«Отменить ⌘Z»), sidebar, toolbar, statusbar
-- Горячие клавиши: ⌘Z undo, ⌘K (заглушка), Space lightbox, R — ручной ШК
+- Горячие клавиши: ⌘Z undo, ⌘K — командная палитра (v3.2.2), Space lightbox, R — ручной ШК
 - Дизайн-токены master §10; blur только в модалках/тостах
 - `lib/sidecar.ts`: JSON-RPC клиент, heartbeat 3 с, Tauri `sidecar://ready`
 

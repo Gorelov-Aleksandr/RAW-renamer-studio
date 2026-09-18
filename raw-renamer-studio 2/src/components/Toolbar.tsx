@@ -12,6 +12,7 @@ const FILTERS: { f: Filter; label: string }[] = [
 
 export default function Toolbar() {
   const session = useSession((s) => s.session);
+  const online = useSession((s) => s.online);
   const filter = useSession((s) => s.filter);
   const search = useSession((s) => s.search);
   const zoom = useSession((s) => s.zoom);
@@ -75,8 +76,12 @@ export default function Toolbar() {
       </span>
       <button
         onClick={() => void undoLast()}
-        title="Отмена последней операции (⌘Z)"
-        className="h-8 px-3 rounded-lg bg-input border border-white/10 text-[12.5px] font-semibold text-tx-2 hover:bg-elevated hover:text-tx-1 flex items-center gap-1.5"
+        disabled={!online}
+        title={online ? 'Отмена последней операции (⌘Z)' : 'Sidecar офлайн — отмена недоступна'}
+        className={cx(
+          'h-8 px-3 rounded-lg bg-input border border-white/10 text-[12.5px] font-semibold text-tx-2 hover:bg-elevated hover:text-tx-1 flex items-center gap-1.5',
+          !online && 'opacity-40 cursor-not-allowed',
+        )}
       >
         <Undo2 size={14} />
         Отменить

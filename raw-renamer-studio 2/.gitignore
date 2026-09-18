@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+
+# Python sidecar
+__pycache__/
+*.pyc
+build/
+binaries/
+*.spec.bak
+
+# Runtime (sidecar)
+.data/
+.sidecar/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

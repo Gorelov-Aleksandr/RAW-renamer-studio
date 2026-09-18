@@ -24,7 +24,15 @@ interface AppState {
   zoom: number;
   plan: PlanRow[] | null;
   planSkipped: number;
-  modals: { rename: boolean; barcode: boolean; zayavka: boolean; settings: boolean };
+  modals: {
+    rename: boolean;
+    barcode: boolean;
+    zayavka: boolean;
+    settings: boolean;
+    help: boolean;
+    about: boolean;
+    palette: boolean;
+  };
   lightbox: { src: string; cap: string } | null;
   toasts: Toast[];
   busy: boolean;
@@ -51,7 +59,10 @@ interface AppState {
   executePlan: () => Promise<void>;
   undoLast: () => Promise<void>;
   retryXlsx: () => Promise<void>;
-  setModal: (m: 'rename' | 'barcode' | 'zayavka' | 'settings', open: boolean) => void;
+  setModal: (
+    m: 'rename' | 'barcode' | 'zayavka' | 'settings' | 'help' | 'about' | 'palette',
+    open: boolean,
+  ) => void;
   closeModals: () => void;
   setLightbox: (lb: AppState['lightbox']) => void;
 }
@@ -70,7 +81,7 @@ export const useSession = create<AppState>()((set, get) => ({
   zoom: 100,
   plan: null,
   planSkipped: 0,
-  modals: { rename: false, barcode: false, zayavka: false, settings: false },
+  modals: { rename: false, barcode: false, zayavka: false, settings: false, help: false, about: false, palette: false },
   lightbox: null,
   toasts: [],
   busy: false,
@@ -311,6 +322,10 @@ export const useSession = create<AppState>()((set, get) => ({
 
   undoLast: async () => {
     if (get().busy) return;
+    if (!get().online) {
+      get().toast('info', 'Sidecar офлайн', 'Отмена недоступна — запустите Python sidecar');
+      return;
+    }
     set({ busy: true });
     try {
       const r = await sc.rpc<{ restored: number; xlsx: { restored?: number; locked?: boolean; message?: string } | null }>('renamer.undo', {});
@@ -336,7 +351,18 @@ export const useSession = create<AppState>()((set, get) => ({
   },
 
   setModal: (m, open) => set((s) => ({ modals: { ...s.modals, [m]: open } })),
-  closeModals: () => set({ modals: { rename: false, barcode: false, zayavka: false, settings: false } }),
+  closeModals: () =>
+    set({
+      modals: {
+        rename: false,
+        barcode: false,
+        zayavka: false,
+        settings: false,
+        help: false,
+        about: false,
+        palette: false,
+      },
+    }),
   setLightbox: (lb) => set({ lightbox: lb }),
 }));
 

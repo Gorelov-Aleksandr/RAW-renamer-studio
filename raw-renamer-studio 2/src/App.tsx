@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { MoreVertical } from 'lucide-react';
 import { useSession } from './store/useSession';
 import * as sc from './lib/sidecar';
 import { cx } from './lib/cx';
@@ -12,23 +11,15 @@ import RenameModal from './components/RenameModal';
 import BarcodeModal from './components/BarcodeModal';
 import ZayavkaModal from './components/ZayavkaModal';
 import SettingsModal from './components/SettingsModal';
+import HelpModal from './components/HelpModal';
+import AboutModal from './components/AboutModal';
+import CommandPalette from './components/CommandPalette';
+import AppMenu from './components/AppMenu';
 import Lightbox from './components/Lightbox';
 import Toasts from './components/Toasts';
+import { Logo } from './components/Logo';
 
-export function Logo({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0">
-      <defs>
-        <linearGradient id="lg-logo" x1="2" y1="2" x2="20" y2="20" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#8D7EF5" />
-          <stop offset="1" stopColor="#F0A24E" />
-        </linearGradient>
-      </defs>
-      <rect x="2" y="2" width="18" height="18" rx="5.5" fill="url(#lg-logo)" />
-      <path d="M7.2 15V7h2.1l3.9 5.2V7h2V15h-2.1L9.2 9.8V15H7.2z" fill="#0D0E12" />
-    </svg>
-  );
-}
+export { Logo };
 
 export default function App() {
   const init = useSession((s) => s.init);
@@ -36,7 +27,6 @@ export default function App() {
   const session = useSession((s) => s.session);
   const info = useSession((s) => s.info);
   const flipMode = useSession((s) => s.flipMode);
-  const toast = useSession((s) => s.toast);
 
   useEffect(() => {
     init();
@@ -54,7 +44,8 @@ export default function App() {
       }
       if (mod && ['k', 'K', 'л', 'Л'].includes(e.key)) {
         e.preventDefault();
-        st.toast('info', 'Командная палитра', 'Поиск действий — в полной версии ⌘K');
+        // BUG-008: настоящая командная палитра (был тост-заглушка)
+        st.setModal('palette', !st.modals.palette);
         return;
       }
       if (e.key === 'Escape') {
@@ -141,13 +132,8 @@ export default function App() {
             <kbd className="text-[10.5px] text-tx-2 bg-white/5 border border-white/10 border-b-2 rounded px-1">⌘</kbd>
             K
           </span>
-          <button
-            className="w-[30px] h-[30px] rounded-md grid place-items-center text-tx-2 hover:bg-elevated hover:text-tx-1 transition-colors"
-            title="Меню — справка и настройки"
-            onClick={() => toast('info', 'Меню', 'Справка · Настройки · О приложении')}
-          >
-            <MoreVertical size={16} />
-          </button>
+          {/* BUG-007: выпадающее меню (был тост-заглушка) */}
+          <AppMenu />
         </div>
       </header>
 
@@ -165,6 +151,9 @@ export default function App() {
       <BarcodeModal />
       <ZayavkaModal />
       <SettingsModal />
+      <HelpModal />
+      <AboutModal />
+      <CommandPalette />
       <Lightbox />
       <Toasts />
     </div>
