@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #0d0e12;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* v3.3 (C2): UI не выделяется «случайно», но данные — копируемы.
+   Поля ввода и элементы с .selectable (артикулы, ШК, имена) выбираемы. */
+input,
+textarea,
+select,
+option {
+  user-select: text;
+}
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* Скроллбары в стиле прототипа */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Моно-чипы (артикулы, ШК, имена файлов) */
+.mono-tag {
+  @apply font-mono text-[10.5px] font-semibold text-tx-2 bg-white/5 border border-white/10 rounded px-1.5 py-0.5 tabular-nums;
+}
+
+/* v3.5: спиннер запуска движка (кольцевой индикатор) */
+.spinner {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: #7c6cf0;
+  animation: rrs-spin 0.8s linear infinite;
+}
+@keyframes rrs-spin {
+  to { transform: rotate(360deg); }
+}
