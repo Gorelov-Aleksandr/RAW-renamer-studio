@@ -121,17 +121,37 @@ export function initSidecar(
       if (failCount >= 2) onStatus({ status: 'offline' });
     }
   };
-  beat();
-  window.setInterval(beat, 3000);
 
-  // Tauri: события sidecar://ready|dead|error + опрос sidecar_url
-  // (страховка от гонки: READY мог улететь до подписки фронтенда).
+  // FIX BUG-015: не дёргаем heartbeat, пока baseUrl пуст — иначе зря зажигаем offline
+  if (baseUrl) beat();
+  window.setInterval(() => { if (baseUrl) beat(); }, 3000);
+
   void (async () => {
     try {
       const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
       if (!w.__TAURI_INTERNALS__) return;
-      const { listen } = await import('@tauri-apps/api/event');
+
       const { invoke } = await import('@tauri-apps/api/core');
+
+      // FIX BUG-015 (шаг 1): сначала пробуем получить URL напрямую,
+      // до подписки на события — устраняем гонку "READY улетел раньше listen".
+      const probe = async (): Promise<boolean> => {
+        try {
+          const url = await invoke<string>('sidecar_url');
+          if (url && !baseUrl) {
+            setBaseUrl(url);
+            const port = Number(url.split(':')[2]) || undefined;
+            onStatus({ status: 'online', port });
+            onEvent?.({ kind: 'ready', port: port ?? 0 });
+            return true;
+          }
+        } catch { /* sidecar ещё не готов */ }
+        return false;
+      };
+
+      if (await probe()) { /* уже online */ }
+
+      const { listen } = await import('@tauri-apps/api/event');
 
       await listen<{ port: number }>('sidecar://ready', (e) => {
         setBaseUrl(`http://127.0.0.1:${e.payload.port}`);
@@ -145,23 +165,16 @@ export function initSidecar(
         onEvent?.({ kind: 'error', message: e.payload.message });
       });
 
-      // Опрос: если событие ready упустили, узнаём URL напрямую.
-      const t0 = Date.now();
-      const poll = window.setInterval(async () => {
-        try {
-          const url = await invoke<string>('sidecar_url');
-          if (url) {
-            setBaseUrl(url);
-            const port = Number(url.split(':')[2]) || undefined;
-            onStatus({ status: 'online', port });
-            window.clearInterval(poll);
-          } else if (Date.now() - t0 > 20000) {
-            window.clearInterval(poll);
-          }
-        } catch {
-          /* ignore — повторимся через 500 мс */
-        }
-      }, 500);
+      // FIX BUG-015 (шаг 2): poll без 20-секундного дедлайна.
+      // Крутится до успеха с backoff 250ms → 3000ms.
+      let delay = 250;
+      const tick = async (): Promise<void> => {
+        if (baseUrl) return;
+        if (await probe()) return;
+        delay = Math.min(delay * 1.5, 3000);
+        window.setTimeout(tick, delay);
+      };
+      window.setTimeout(tick, 250);
     } catch {
       /* браузерный режим: относительный URL через vite-прокси */
     }

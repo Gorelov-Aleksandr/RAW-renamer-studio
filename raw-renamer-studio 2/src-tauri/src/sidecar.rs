@@ -371,7 +371,10 @@ fn find_release_binary<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<std::pat
             .map(|e| e.path())
             .find(|p| {
                 p.file_name()
-                    .map(|n| n.to_string_lossy().starts_with("raw-renamer-sidecar-"))
+                    .map(|n| {
+                    let s = n.to_string_lossy();
+                    s == "raw-renamer-sidecar" || s.starts_with("raw-renamer-sidecar-")
+                })
                     .unwrap_or(false)
             })
     })
