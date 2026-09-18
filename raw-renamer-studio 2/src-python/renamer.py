@@ -78,16 +78,26 @@ def execute(pairs: list[dict]) -> list[dict]:
     return [{'from': str(s), 'to': str(d)} for s, d in zip(srcs, dsts)]
 
 
-def undo_rename(files: list[dict]) -> int:
-    """Откат: to → from (в обратном порядке), двухфазно-безопасно."""
+def undo_rename(files: list[dict]) -> dict:
+    """Откат: to → from (в обратном порядке), двухфазно-безопасно.
+
+    v3.3: возвращает {'restored': n, 'missing': [имена]} — файлы, которых
+    физически нет на диске (удалены пользователем), прогоняются явно.
+    """
     pairs = []
+    missing: list[str] = []
     for f in reversed(files):
         s, d = Path(f['to']), Path(f['from'])
         if s.is_file():
             pairs.append({'src': str(s), 'dst': str(d)})
+        else:
+            missing.append(s.name)
     if not pairs:
-        return 0
-    return len(execute(pairs))
+        return {'restored': 0, 'missing': missing}
+    return {'restored': len(execute(pairs)), 'missing': missing}
+
+
+JOURNAL_MAX = 100  # v3.3: журнал не растёт бесконечно (старики отбрасываются)
 
 
 class Journal:
@@ -112,6 +122,9 @@ class Journal:
             'xlsx': xlsx,
         }
         self.entries.append(e)
+        overflow = len(self.entries) - JOURNAL_MAX
+        if overflow > 0:
+            self.entries = self.entries[overflow:]  # отбрасываем старейшие
         self._save()
         return e
 

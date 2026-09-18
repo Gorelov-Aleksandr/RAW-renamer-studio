@@ -89,6 +89,20 @@ Sidecar: python3 src-python/server.py --port 0 --port-file .sidecar/port
 PyInstaller: pyinstaller src-python/sidecar.spec → binaries/raw-renamer-sidecar-{triple}
 
 ## CHANGES LOG
+v3.2.2 (2026-09-18) — багфикс BUG-001…BUG-008 (см. BUGS_FIXED.md):
+- CSV: переписан детект кодировки (UTF-16 LE/BE ±BOM, UTF-8 ±BOM, cp1251) —
+  фикс «The string did not match the expected pattern» (UTF-8 без BOM при
+  чётной длине определялся как UTF-16 LE); информативные ошибки парсинга
+  (кодировка/разделитель/столбцы)
+- Браузер: выбор папки съёмки (showDirectoryPicker / webkitdirectory) +
+  загрузка RAW в sidecar (POST /upload, новое поле `dir` = подпапка uploads)
+  → «+»/«Открыть папку…» реально открывают партию (BUG-001/005)
+- Офлайн-режим: при SIDECAR OFFLINE RPC-кнопки блокируются (tooltip) вместо
+  тостов «Sidecar недоступен» (BUG-006); ⌘Z в офлайне — info, не error
+- Меню ⋮ — выпадающее: Справка / Настройки / О приложении (BUG-007)
+- ⌘K — командная палитра: поиск + 10 действий, ↑↓/Enter/Esc (BUG-008)
+- Заявка: file-picker с fallback-инпутом, DnD с dropEffect, офлайн-баннер
+  (BUG-002/003); окно Help/About/CommandPalette, Logo вынесен в компонент
 v3.2.1 (2026-09-18):
 - CSV loading: auto-detect encoding (UTF-16 LE/BE BOM, UTF-8 BOM, UTF-16 LE no BOM)
 - New RPC: session.refresh_angles — update zayavka angle counts from actual files

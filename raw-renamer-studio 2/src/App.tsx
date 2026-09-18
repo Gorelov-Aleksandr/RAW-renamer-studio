@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
-import { MoreVertical } from 'lucide-react';
-import { useSession } from './store/useSession';
+import { Component, useEffect, type ReactNode } from 'react';
+import { useSession, errMsg } from './store/useSession';
 import * as sc from './lib/sidecar';
+import { log, logError } from './lib/logger';
+import { pickFolder } from './lib/pickFolder';
 import { cx } from './lib/cx';
 import Sidebar from './components/Sidebar';
 import Toolbar from './components/Toolbar';
@@ -12,35 +13,161 @@ import RenameModal from './components/RenameModal';
 import BarcodeModal from './components/BarcodeModal';
 import ZayavkaModal from './components/ZayavkaModal';
 import SettingsModal from './components/SettingsModal';
+import HelpModal from './components/HelpModal';
+import AboutModal from './components/AboutModal';
+import CommandPalette from './components/CommandPalette';
+import AppMenu from './components/AppMenu';
 import Lightbox from './components/Lightbox';
 import Toasts from './components/Toasts';
+import { Logo } from './components/Logo';
 
-export function Logo({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0">
-      <defs>
-        <linearGradient id="lg-logo" x1="2" y1="2" x2="20" y2="20" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#8D7EF5" />
-          <stop offset="1" stopColor="#F0A24E" />
-        </linearGradient>
-      </defs>
-      <rect x="2" y="2" width="18" height="18" rx="5.5" fill="url(#lg-logo)" />
-      <path d="M7.2 15V7h2.1l3.9 5.2V7h2V15h-2.1L9.2 9.8V15H7.2z" fill="#0D0E12" />
-    </svg>
-  );
+export { Logo };
+
+/**
+ * v3.3 (C5): ErrorBoundary — рендер-ошибка не убивает всё приложение.
+ * Показываем понятный экран с кнопкой «Перезапустить».
+ */
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    logError('render_crash', error);
+  }
+  private reset = () => {
+    this.setState({ error: null });
+    window.location.reload();
+  };
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-base text-tx-1 p-8 text-center">
+        <div className="text-[15px] font-semibold">Что-то пошло не так</div>
+        <div className="text-[13px] text-tx-2 max-w-md">
+          Приложение столкнулось с неожиданным сбоем. Данные партии не пострадали.
+        </div>
+        <div className="font-mono text-[11px] text-tx-3 max-w-md break-all">
+          {this.state.error.message}
+        </div>
+        <button
+          onClick={this.reset}
+          className="mt-2 h-9 px-5 rounded-lg bg-accent-fill hover:bg-[#6A57E2] text-white text-[13px] font-bold"
+        >
+          Перезапустить приложение
+        </button>
+      </div>
+    );
+  }
 }
 
 export default function App() {
   const init = useSession((s) => s.init);
   const online = useSession((s) => s.online);
+  const engineState = useSession((s) => s.engineState);
   const session = useSession((s) => s.session);
   const info = useSession((s) => s.info);
   const flipMode = useSession((s) => s.flipMode);
-  const toast = useSession((s) => s.toast);
 
   useEffect(() => {
     init();
   }, [init]);
+
+  // v3.3 (L5): drag&drop папки съёмки / заявки прямо на окно приложения.
+  // Tauri: событие tauri://drag-drop (WKWebView не отдаёт содержимое папок
+  // через DataTransfer — нативное событие даёт реальные пути).
+  // Браузер: webkitGetAsEntry (Chromium) / входные файлы.
+  useEffect(() => {
+    if (!sc.isTauri()) {
+      const onDrop = async (e: DragEvent) => {
+        if (!e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        const st = useSession.getState();
+        const files = Array.from(e.dataTransfer.files);
+        const xlsx = files.find((f) => /\.(xlsx|xlsm)$/i.test(f.name));
+        if (xlsx) {
+          log('dnd_zayavka', 'info', { file: xlsx.name });
+          try {
+            // браузер не знает путей — загружаем файл в sidecar и открываем копию
+            const up = await sc.uploadFile(xlsx);
+            await st.loadZayavka(up.path);
+          } catch (e) {
+            st.toast('err', 'Не удалось загрузить заявку', errMsg(e));
+          }
+          return;
+        }
+        const raw = files.filter((f) => /\.(cr2|cr3|arw|nef|orf|rw2|dng|raf|nrw|pef|x3f)$/i.test(f.name));
+        if (raw.length === 0) {
+          st.toast('info', 'Нет RAW-файлов', 'Перетащите папку со съёмкой или файл .xlsx заявки');
+        } else {
+          st.toast('info', 'Перетащите папку целиком', 'Отдельные RAW-файлы не образуют партию — нужна папка съёмки');
+        }
+      };
+      window.addEventListener('drop', onDrop);
+      const onOver = (e: DragEvent) => e.preventDefault();
+      window.addEventListener('dragover', onOver);
+      return () => {
+        window.removeEventListener('drop', onDrop);
+        window.removeEventListener('dragover', onOver);
+      };
+    }
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen<{ type: string; paths: string[] }>('tauri://drag-drop', (e) => {
+          if (e.payload.type !== 'drop' || !e.payload.paths.length) return;
+          void (async () => {
+            const st = useSession.getState();
+            for (const p of e.payload.paths) {
+              if (/\.xlsx?$/i.test(p)) {
+                log('dnd_zayavka', 'info', { path: p });
+                await st.loadZayavka(p);
+                continue;
+              }
+              try {
+                const isDir = await sc.rpc<{ is_dir: boolean }>('fs.is_dir', { path: p });
+                if (isDir.is_dir) {
+                  log('dnd_folder', 'info', { path: p });
+                  await st.openFolder(p, 'cv');
+                  return;
+                }
+              } catch {
+                continue;
+              }
+            }
+            st.toast('info', 'Перетащите папку целиком', 'Отдельные RAW-файлы не образуют партию — нужна папка съёмки');
+          })();
+        });
+      } catch {
+        /* слушатель не поднимется — DnD просто недоступен */
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  // v3.3 (D3): события нативного меню macOS (menu://*) → те же действия, что и кнопки.
+  useEffect(() => {
+    if (!sc.isTauri()) return;
+    const un: (() => void)[] = [];
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        un.push(await listen('menu://open', () => void pickFolder()));
+        un.push(
+          await listen('menu://settings', () => useSession.getState().setModal('settings', true)),
+        );
+        un.push(await listen('menu://undo', () => void useSession.getState().undoLast()));
+        un.push(await listen('menu://help', () => useSession.getState().setModal('help', true)));
+        un.push(
+          await listen('menu://about', () => useSession.getState().setModal('about', true)),
+        );
+      } catch {
+        /* меню недоступно — не критично */
+      }
+    })();
+    return () => un.forEach((f) => f());
+  }, []);
 
   // Глобальные горячие клавиши (master §10 / прототип)
   useEffect(() => {
@@ -54,7 +181,15 @@ export default function App() {
       }
       if (mod && ['k', 'K', 'л', 'Л'].includes(e.key)) {
         e.preventDefault();
-        st.toast('info', 'Командная палитра', 'Поиск действий — в полной версии ⌘K');
+        // BUG-008: настоящая командная палитра (был тост-заглушка)
+        st.setModal('palette', !st.modals.palette);
+        return;
+      }
+      // v3.3: ⌘O — открыть папку съёмки (нативный диалог / браузерный picker)
+      if (mod && ['o', 'O', 'х', 'Х'].includes(e.key)) {
+        e.preventDefault();
+        log('hotkey_open');
+        void pickFolder();
         return;
       }
       if (e.key === 'Escape') {
@@ -113,7 +248,10 @@ export default function App() {
         <div className="w-px h-5 bg-white/10" />
         {session ? (
           <div className="flex items-center gap-2 text-xs text-tx-2 bg-surface border border-white/5 rounded-md px-2.5 py-1 min-w-0">
-            <span className={cx('w-1.5 h-1.5 rounded-full flex-shrink-0', online ? 'bg-ok' : 'bg-danger')} />
+            <span
+              title={engineState === 'online' ? 'Движок работает' : engineState === 'starting' ? 'Движок запускается…' : 'Движок не отвечает'}
+              className={cx('w-1.5 h-1.5 rounded-full flex-shrink-0', online ? 'bg-ok' : engineState === 'starting' ? 'bg-tx-3' : 'bg-danger')}
+            />
             <span className="truncate">
               Партия <b className="font-mono text-tx-1 text-[11.5px]">{folderName}</b>
             </span>
@@ -129,25 +267,37 @@ export default function App() {
           <span className="text-xs text-tx-3">Партия не открыта</span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {info && (
-            <span className="font-mono text-[10px] text-tx-3 hidden md:inline">sidecar :{info.port}</span>
+          {engineState === 'online' && (
+            <button
+              onClick={() => useSession.getState().setModal('about', true)}
+              title={info ? `Всё работает · движок v${info.version}` : 'Всё работает'}
+              className="text-[10px] font-semibold tracking-wide text-ok/80 bg-ok/10 border border-ok/20 rounded px-1.5 py-0.5 hover:bg-ok/15 transition-colors"
+            >
+              онлайн
+            </button>
           )}
-          {!online && (
-            <span className="text-[10px] font-bold tracking-wider text-danger bg-danger/15 border border-danger/30 rounded px-1.5 py-0.5">
-              SIDECAR OFFLINE
+          {engineState === 'starting' && (
+            <span
+              title="Движок запускается. Первый запуск занимает 3–10 секунд — это нормально, ничего делать не надо."
+              className="text-[10px] font-semibold tracking-wide text-tx-2 bg-white/5 border border-white/10 rounded px-1.5 py-0.5"
+            >
+              запуск…
+            </span>
+          )}
+          {engineState === 'offline' && (
+            <span
+              title="Приложение не может связаться с Python-движком. Закройте и откройте приложение заново."
+              className="text-[10px] font-semibold tracking-wide text-danger bg-danger/15 border border-danger/30 rounded px-1.5 py-0.5"
+            >
+              движок не отвечает
             </span>
           )}
           <span className="hidden sm:inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg font-mono text-[11px] text-tx-3 bg-white/5 border border-white/10">
             <kbd className="text-[10.5px] text-tx-2 bg-white/5 border border-white/10 border-b-2 rounded px-1">⌘</kbd>
             K
           </span>
-          <button
-            className="w-[30px] h-[30px] rounded-md grid place-items-center text-tx-2 hover:bg-elevated hover:text-tx-1 transition-colors"
-            title="Меню — справка и настройки"
-            onClick={() => toast('info', 'Меню', 'Справка · Настройки · О приложении')}
-          >
-            <MoreVertical size={16} />
-          </button>
+          {/* BUG-007: выпадающее меню (был тост-заглушка) */}
+          <AppMenu />
         </div>
       </header>
 
@@ -165,6 +315,9 @@ export default function App() {
       <BarcodeModal />
       <ZayavkaModal />
       <SettingsModal />
+      <HelpModal />
+      <AboutModal />
+      <CommandPalette />
       <Lightbox />
       <Toasts />
     </div>

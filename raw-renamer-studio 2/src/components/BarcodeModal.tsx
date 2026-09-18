@@ -118,9 +118,9 @@ export default function BarcodeModal() {
                   {look.source === 'zayavka'
                     ? 'Есть в заявке'
                     : look.source === 'cache'
-                      ? 'Из SQLite-кэша'
+                      ? 'Из локального кэша'
                       : look.source === 'api'
-                        ? 'Найдено в APIM v3'
+                        ? 'Найдено на сервере Леруа Мерлен'
                         : 'В заявке и кэше нет — будет добавлен как новый'}
                 </span>
                 {look.lm && <span className="font-mono font-bold text-ok ml-auto">{look.lm}</span>}

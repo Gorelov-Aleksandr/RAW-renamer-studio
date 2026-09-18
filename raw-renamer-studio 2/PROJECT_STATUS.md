@@ -5,7 +5,7 @@
 > Единственный источник правды по СПЕЦИФИКАЦИИ — `docs/RAW_RENAMER_STUDIO_ULTIMATE_MASTER.md`
 > (VER 3.0, 1549 строк). По процессу и статусу — этот файл.
 
-**Дата последнего обновления: 2026-09-18 (МСК) — патч v3.1 (заявка/настройки/генератор)**
+**Дата последнего обновления: 2026-09-19 (МСК) — v3.4.1: Mac-сборка, восстановление репо, ЗАМ-001/002/004, см. CHANGELOG.md**
 
 ---
 
@@ -33,9 +33,90 @@
 
 ## 3. ТЕКУЩИЙ ЭТАП (читать в первую очередь при продолжении)
 
-**Этап: MAC-версия собирается, идёт наполнение функционалом (v3.1).**
+**Этап: v3.4.1 — Mac-сборка РАБОТАЕТ (на маке пользователя). Репозиторий восстановлен
+и свёрнут в чистую историю (web-загрузка «Add files via upload» вычищена force-push'ом,
+PR #1 на main). Следующие шаги: (1) пользователь пересобирает на маке (Rust-изменения
+v3.4.1 не проверялись компиляцией в песочнице — там нет cargo) и смотрит DevTools-таймкоды
+по остатку BUG-015; (2) ручной macOS-прогон (NSOpenPanel/меню/DnD/kill-on-exit/App Nap);
+(3) слияние PR #1 на main по желанию пользователя.**
+
+СДЕЛАНО v3.4.1: ЗАМ-001 (состояния starting/online/offline во всех индикаторах,
+grace 10 с на heartbeat, dead/error → сразу offline, новый invoke sidecar_error
+против гонки событий), ЗАМ-002 (dedup тостов 3 с), ЗАМ-004 (супервизор: ранний
+выход без ретраев при отсутствии бинарника).
 
 ХРОНИКА:
+V3.4. **MAC-СБОРКА + ВОССТАНОВЛЕНИЕ РЕПО (2026-09-19) — СДЕЛАНО (см. CHANGELOG.md):**
+   - Mac-сборка Tauri 2.11.5 проходит: E0599 (`use tauri::Emitter;`, dc9dd16),
+     E0283 (`None::<&str>`, 74cafdf) + фиксы параллельной работы другого агента,
+     извлечённые из web-загрузки и свёрнуты в коммит 5ee8de2:
+     BUG-012 (find_release_binary принимает оба имени бинарника),
+     BUG-015 (initSidecar: probe ДО listen, backoff-poll без дедлайна,
+     heartbeat только после baseUrl), tauri.conf.json bundle=["app","dmg"]
+     (убран nsis), src-python/raw-renamer-sidecar.spec, src-tauri/Cargo.lock.
+   - Доделано по CHANGELOG: BUG-013 (_say() в server.py — BrokenPipe на выходе),
+     BUG-011 (npm run build:sidecar + scripts/build-sidecar.sh; build-macos.sh
+     вызывает его шагом 2; src-python/requirements.txt создан).
+   - GitHub: пользователь загрузил проект через web-UI (лимиты 100 файлов/
+     25 МБ, папка переименована в 'raw-renamer-studio', добавлены node_modules/
+     dist/). Из 102 файлов потеряно только .gitignore (web-UI не грузит dotfiles).
+     Ветку force-pushнули в чистое состояние: 45d332d → d348676 → 8d96c79 →
+     dc9dd16 → 74cafdf → 5ee8de2 → (доделки v3.4). Папка в репо осталась
+     'raw-renamer-studio 2' (имя не меняли, чтобы не ломать рабочие копии).
+   - На маке пользователя бинарник sidecar ~69 МБ уже собран (PyInstaller);
+     в Git он НЕ идёт (лимит 25 МБ) — собирается npm run build:sidecar.
+   - PR #1 (arena → main) создан; слияние — за пользователем.
+V3.4.1. **ЗАМ-001/002/004 + остаток BUG-015 (2026-09-19) — СДЕЛАНО:**
+   - Корень «запаздывает ~30 с»: с t=0 UI показывал красное «движок не отвечает»
+     даже во время НОРМАЛЬНОГО холодного старта (3–10 с PyInstaller). Теперь
+     состояния: «запуск… (3–10 с — это нормально)» → «онлайн» → «движок не
+     отвечает». Точки-индикаторы и Настройки/Справка — синхронизированы.
+   - Grace-период 10 с после URL/READY: heartbeat не «вздрагивает» offline
+     на холодном старте; dead/error-события → offline сразу (без ожидания
+     двух провалов heartbeat).
+   - Гонка sidecar://error до подписки вебвью: новый Rust-команды
+     sidecar_error (опрос в probe()), console-таймкоды [sidecar] +N.Ns
+     для диагностики в DevTools.
+   - ЗАМ-002: dedup тостов (kind+title+sub, 3 с).
+   - ЗАМ-004: супервизор — при ошибке build_command (нет бинарника) выходит
+     сразу, без 3 ретраев по 1.5 с.
+   - Проверено: tsc 0, vite build OK. Rust НЕ компилировался в песочнице
+     (нет cargo) — проверить сборкой на маке.
+0a. **ГЛУБОКИЙ АУДИТ + V3.3 (2026-09-18) — СДЕЛАНО (см. AUDIT.md):**
+   - Найдено/исправлено 22 бага: 3 HIGH рантайм (G1 DnD-кадров `idx`/`to_idx`,
+     G2 гонка старта READY-до-accept, B2 произвольное чтение file.download),
+     T3 нет capability (NSOpenPanel блокировался), D1 зомби-sidecar (kill-on-exit),
+     D2 ложная смерть (watchdog 30с + сброс рестартов), B1 APIM последовательно
+     (параллельно 6 + circuit breaker).
+   - UX/архитектура: жаргон убран («движок не отвечает», «сервер Леруа Мерлен»),
+     Настройки Базовые/Про, ErrorBoundary, ⌘O, DnD папки на окно, нативное меню
+     macOS, CSP, user-select на данных, битые превью onError.
+   - Логирование (L1): JSONL sidecar (rrslog.py, ротация gzip 5МБ×3) + FE (logger.ts,
+     POST /log, correlation X-RRS-Session) + CLI-декодер tools/logcat.py.
+   - Persist (L2/L6): settings.json + last_session.json в data_dir (переживают рестарт).
+   - Память/скорость: mmap RAW (B13), per-frame ext + коллизия LM 4090 (B5),
+     /upload 400МБ поток (B3), /preview 404 на битом JPEG (B4), .tmp_rename очистка (B6),
+     undo missing-отчёт + журнал ≤100 (B7), OpenCV plausibility (B11).
+   - Тесты: tests/{test_pim_parser 24, test_server 52, test_perf 4} = 80 passed.
+   - Осталось (на macOS): cargo tauri build + ручной прогон NSOpenPanel/меню/DnD/
+     kill-on-exit/App Nap; прогресс скана больших партий; a11y-проход.
+0b. **БАГФИКС QA (2026-09-18) — СДЕЛАНО (v3.2.2, см. BUGS_FIXED.md):**
+   - BUG-004: переписан детект кодировки CSV (UTF-16 LE/BE ±BOM, UTF-8 ±BOM,
+     cp1251) — корень «The string did not match the expected pattern»;
+     информативные ошибки парсинга (кодировка/разделитель/столбцы).
+   - BUG-001/005: «+»/«Открыть папку…» в браузере — выбор папки
+     (showDirectoryPicker / webkitdirectory) + загрузка RAW в sidecar
+     (`POST /upload` новое поле `dir`) → открытие сессии; Tauri — нативный диалог.
+   - BUG-006: при SIDECAR OFFLINE все RPC-кнопки блокируются (tooltip)
+     вместо тостов «Sidecar недоступен»; ⌘Z в офлайне — info, не error.
+   - BUG-007: меню ⋮ — выпадающее (Справка/Настройки/О приложении, 2 новых окна).
+   - BUG-008: ⌘K — командная палитра (поиск, 10 действий, ↑↓/Enter/Esc).
+   - BUG-002/003: file-picker заявки с fallback-инпутом; DnD CSV с dropEffect.
+   - Проверено E2E: upload+open_folder (22 файла→6 товаров, CV 6/6),
+     zayavka.generate (7 кодировок/разделителей), rename+undo, tsc+vite build.
+   - Файлы: BUGS_FIXED.md (отчёт), src/lib/pickFolder.ts, src/lib/ops.ts,
+     components/{AppMenu,CommandPalette,HelpModal,AboutModal,Logo}.tsx (новые).
+1. Пользователь поставил Rust 1.98.1 (Apple Silicon), собрал проект.
 1. Пользователь поставил Rust 1.98.1 (Apple Silicon), собрал проект.
 2. SIGABRT в did_finish_launching → переписан `sidecar.rs` (panic-free
    супервизор + auto-restart + события + poll sidecar_url). **Сборка прошла.**
@@ -104,7 +185,7 @@
 - Виртуализированная сетка (@tanstack/react-virtual), DnD ракурсов (dnd-kit)
   с правкой суффиксов, модалки (план, ручной ШК с live-lookup, PIM-заявка),
   лайтбокс, тосты (кнопки «Повторить»/«Отменить ⌘Z»), sidebar, toolbar, statusbar
-- Горячие клавиши: ⌘Z undo, ⌘K (заглушка), Space lightbox, R — ручной ШК
+- Горячие клавиши: ⌘Z undo, ⌘K — командная палитра (v3.2.2), Space lightbox, R — ручной ШК
 - Дизайн-токены master §10; blur только в модалках/тостах
 - `lib/sidecar.ts`: JSON-RPC клиент, heartbeat 3 с, Tauri `sidecar://ready`
 

@@ -15,6 +15,8 @@ export type Filter = 'all' | 'ok' | 'warn' | 'err' | 'new';
 
 interface AppState {
   online: boolean;
+  /** ЗАМ-001: раздельные состояния (starting до первого online — не пугать красным) */
+  engineState: sc.EngineState;
   info: SystemInfo | null;
   session: SessionData | null;
   activeId: string | null;
@@ -24,7 +26,15 @@ interface AppState {
   zoom: number;
   plan: PlanRow[] | null;
   planSkipped: number;
-  modals: { rename: boolean; barcode: boolean; zayavka: boolean; settings: boolean };
+  modals: {
+    rename: boolean;
+    barcode: boolean;
+    zayavka: boolean;
+    settings: boolean;
+    help: boolean;
+    about: boolean;
+    palette: boolean;
+  };
   lightbox: { src: string; cap: string } | null;
   toasts: Toast[];
   busy: boolean;
@@ -51,13 +61,18 @@ interface AppState {
   executePlan: () => Promise<void>;
   undoLast: () => Promise<void>;
   retryXlsx: () => Promise<void>;
-  setModal: (m: 'rename' | 'barcode' | 'zayavka' | 'settings', open: boolean) => void;
+  setModal: (
+    m: 'rename' | 'barcode' | 'zayavka' | 'settings' | 'help' | 'about' | 'palette',
+    open: boolean,
+  ) => void;
   closeModals: () => void;
   setLightbox: (lb: AppState['lightbox']) => void;
 }
 
 let inited = false;
 let autoOpened = false;
+let lastToastKey = '';
+let lastToastTs = 0;
 
 export const useSession = create<AppState>()((set, get) => ({
   online: false,
@@ -70,19 +85,22 @@ export const useSession = create<AppState>()((set, get) => ({
   zoom: 100,
   plan: null,
   planSkipped: 0,
-  modals: { rename: false, barcode: false, zayavka: false, settings: false },
+  modals: { rename: false, barcode: false, zayavka: false, settings: false, help: false, about: false, palette: false },
   lightbox: null,
   toasts: [],
   busy: false,
   lastExcelTs: 0,
+  engineState: 'starting',
 
   init: () => {
     if (inited) return;
     inited = true;
     sc.initSidecar(
       (status) => {
+        // ЗАМ-001: состояние движка (starting/online/offline) + online-булеан
+        // для блокировок кнопок.
+        set({ engineState: status.status, online: status.status === 'online' });
         const isOnline = status.status === 'online';
-        if (isOnline !== get().online) set({ online: isOnline });
         if (isOnline && !autoOpened) {
           autoOpened = true;
           void (async () => {
@@ -94,22 +112,32 @@ export const useSession = create<AppState>()((set, get) => ({
                 await st.openFolder(info.demo.raw_folder, 'cv', info.demo.zayavka);
               }
             } catch {
-              /* sidecar не отвечает — баннер offline покажет состояние */
+              /* движок не отвечает — баннер offline покажет состояние */
             }
           })();
         }
       },
       (e) => {
         if (e.kind === 'error') {
-          get().toast('err', 'Ошибка sidecar', e.message);
+          get().toast('err', 'Ошибка приложения', e.message);
         }
-        // 'dead' — heartbeat сам переключит баннер на offline;
+        if (e.kind === 'dead') {
+          // 'dead' — сразу offline, не ждём двух провалов heartbeat.
+          set({ engineState: 'offline', online: false });
+        }
         // 'ready' — уже обработан внутри клиента (baseUrl + online)
       },
     );
   },
 
   toast: (kind, title, sub, actionLabel, action) => {
+    // ЗАМ-002: dedup — одинаковый тост (kind+title+sub) не чаще раза в 3 с.
+    // Без этого «Движок недоступен» мог накрыть экран толпой.
+    const key = `${kind}|${title}|${sub ?? ''}`;
+    const now = Date.now();
+    if (key === lastToastKey && now - lastToastTs < 3000) return;
+    lastToastKey = key;
+    lastToastTs = now;
     const id = Date.now() + Math.floor(Math.random() * 1000);
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, title, sub, actionLabel, action }] }));
     window.setTimeout(() => get().dropToast(id), 6500);
@@ -311,6 +339,10 @@ export const useSession = create<AppState>()((set, get) => ({
 
   undoLast: async () => {
     if (get().busy) return;
+    if (!get().online) {
+      get().toast('info', 'Движок не отвечает', 'Отмена недоступна — перезапустите приложение');
+      return;
+    }
     set({ busy: true });
     try {
       const r = await sc.rpc<{ restored: number; xlsx: { restored?: number; locked?: boolean; message?: string } | null }>('renamer.undo', {});
@@ -336,7 +368,18 @@ export const useSession = create<AppState>()((set, get) => ({
   },
 
   setModal: (m, open) => set((s) => ({ modals: { ...s.modals, [m]: open } })),
-  closeModals: () => set({ modals: { rename: false, barcode: false, zayavka: false, settings: false } }),
+  closeModals: () =>
+    set({
+      modals: {
+        rename: false,
+        barcode: false,
+        zayavka: false,
+        settings: false,
+        help: false,
+        about: false,
+        palette: false,
+      },
+    }),
   setLightbox: (lb) => set({ lightbox: lb }),
 }));
 

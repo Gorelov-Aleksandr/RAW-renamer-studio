@@ -21,12 +21,12 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; font-src 'self' data:"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis"],
+    "targets": ["app", "dmg"],
     "icon": ["icons/icon.png"],
     "externalBin": ["binaries/raw-renamer-sidecar"],
     "resources": []

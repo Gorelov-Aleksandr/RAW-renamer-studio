@@ -26,6 +26,7 @@ export default function StatusBar() {
   const session = useSession((s) => s.session);
   const zoom = useSession((s) => s.zoom);
   const info = useSession((s) => s.info);
+  const engineState = useSession((s) => s.engineState);
   const makePlan = useSession((s) => s.makePlan);
   const busy = useSession((s) => s.busy);
   const lastExcelTs = useSession((s) => s.lastExcelTs);
@@ -53,17 +54,17 @@ export default function StatusBar() {
         <span
           className={cx(
             'w-[7px] h-[7px] rounded-full',
-            engines ? (engines.zxing || engines.opencv ? 'bg-ok' : 'bg-warn') : 'bg-danger',
+            engines ? (engines.zxing || engines.opencv ? 'bg-ok' : 'bg-warn') : engineState === 'starting' ? 'bg-tx-3' : 'bg-danger',
           )}
         />
         {engines ? (
           <span className="text-[11.5px] text-tx-3">
-            ШК: {[engines.zxing && 'zxing', engines.opencv && 'opencv', engines.pyzbar && 'pyzbar']
-              .filter(Boolean)
-              .join(' + ') || 'нет движков'}
+            {engines.zxing || engines.opencv ? 'распознавание ШК активно' : 'распознавание ШК не настроено — см. «Настройки»'}
           </span>
+        ) : engineState === 'starting' ? (
+          <span className="text-[11.5px] text-tx-3">движок запускается…</span>
         ) : (
-          <span className="text-[11.5px] text-tx-3">sidecar offline</span>
+          <span className="text-[11.5px] text-tx-3">движок не отвечает</span>
         )}
       </span>
       <button

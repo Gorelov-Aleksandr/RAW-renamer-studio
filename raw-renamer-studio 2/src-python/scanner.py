@@ -80,11 +80,31 @@ def _opencv_find(bgr) -> list[dict]:
         try:
             for t in np.atleast_1d(np.asarray(texts, dtype=object)).ravel():
                 s = str(t).strip()
-                if s and s.lower() not in ('none', 'null'):
-                    out.append({'text': s, 'engine': 'opencv'})
+                if not s or s.lower() in ('none', 'null'):
+                    continue
+                # v3.3: plausibility-фильтр. OpenCV-детектор умеет «видеть»
+                # шум как текст; мусорная строка дальше блокирует ZXing
+                # (см. detect(): if found: return). Принимаем только цифры
+                # 8–13, а 13-значные — только с верной контрольной цифрой.
+                if re.fullmatch(r'\d{13}', s):
+                    if not _ean13_ok(s):
+                        continue
+                elif re.fullmatch(r'\d{8,13}', s):
+                    pass
+                else:
+                    continue
+                out.append({'text': s, 'engine': 'opencv'})
         except Exception:
             pass
     return out
+
+
+def _ean13_ok(s: str) -> bool:
+    try:
+        v = sum(int(c) * (1 if i % 2 == 0 else 3) for i, c in enumerate(s[:12]))
+        return (10 - v % 10) % 10 == int(s[12])
+    except Exception:
+        return False
 
 
 def _zxing_find(im) -> list[dict]:

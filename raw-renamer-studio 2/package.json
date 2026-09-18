@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "sidecar": "python3 ../src-python/server.py --port 0 --port-file ../.sidecar/port --data-dir ../.data --watchdog 0"
+    "build:sidecar": "bash scripts/build-sidecar.sh",
+    "sidecar": "python3 src-python/server.py --port 0 --port-file .sidecar/port --data-dir .data --watchdog 0"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",

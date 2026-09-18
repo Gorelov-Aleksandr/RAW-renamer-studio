@@ -7,7 +7,7 @@ import {
 import {
   SortableContext, horizontalListSortingStrategy, useSortable,
 } from '@dnd-kit/sortable';
-import { X, ZoomIn, Pencil, Scissors } from 'lucide-react';
+import { X, ZoomIn, Pencil } from 'lucide-react';
 import type { Frame, Item } from '../types';
 import { useSession } from '../store/useSession';
 import * as sc from '../lib/sidecar';
@@ -142,7 +142,6 @@ export default function RightPanel() {
   const moveFrame = useSession((s) => s.moveFrame);
   const setSuffix = useSession((s) => s.setSuffix);
   const setLightbox = useSession((s) => s.setLightbox);
-  const toast = useSession((s) => s.toast);
   const busy = useSession((s) => s.busy);
   const item = session?.items.find((i) => i.id === activeId) ?? null;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -308,15 +307,6 @@ export default function RightPanel() {
               Переименовать этот товар
             </button>
           )}
-          <button
-            onClick={() =>
-              toast('info', 'Разделить товар', 'Выберите кадры для новой группы (в разработке)')
-            }
-            className="h-9 rounded-lg bg-surface border border-white/10 text-tx-1 text-[12.5px] font-semibold flex items-center justify-center gap-2 hover:bg-elevated"
-          >
-            <Scissors size={14} />
-            Разделить товар
-          </button>
         </div>
       </div>
     </aside>
