@@ -10,11 +10,11 @@ use tauri::Manager;
 fn setup_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
 
-    let about = MenuItem::with_id(app, "about", "О программе", true, None)?;
+    let about = MenuItem::with_id(app, "about", "О программе", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Настройки…", true, Some("CmdOrCtrl+,"))?;
     let open = MenuItem::with_id(app, "open", "Открыть папку…", true, Some("CmdOrCtrl+O"))?;
     let undo = MenuItem::with_id(app, "undo", "Отменить переименование", true, Some("CmdOrCtrl+Z"))?;
-    let help = MenuItem::with_id(app, "help", "Справка", true, None)?;
+    let help = MenuItem::with_id(app, "help", "Справка", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, Some("CmdOrCtrl+Q"))?;
 
     let menu = Menu::with_items(
