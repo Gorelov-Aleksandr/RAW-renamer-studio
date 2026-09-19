@@ -108,7 +108,9 @@ def scan_folder(folder, mode: str = 'cv',
             mm = NAMES_RE.match(f.stem)
             if mm:
                 bc, hint = mm.group(1), (mm.group(2) or '').lower()
-                is_label = hint == 'y'
+                # v3.5: «у» (кириллица) — реальная опечатка русской раскладки в
+                # имени файла; считаем этикеткой. Написание в план всегда 'y' (лат).
+                is_label = hint in ('y', 'у')
                 if current is None or current.get('barcode') != bc:
                     start_item(bc, 'names', f, is_label)
                 else:
