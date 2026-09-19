@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from excel_worker import ExcelWorker, XlsxLockedError  # noqa: E402
 from lookup import Lookup  # noqa: E402
 from pim_builder import build_csv, build_xlsx, read_pim  # noqa: E402
-from raw_engine import extract_preview, extract_preview_bytes, file_hash, make_jpeg_thumb  # noqa: E402
+from raw_engine import RAW_EXTS, extract_preview, extract_preview_bytes, file_hash, make_jpeg_thumb  # noqa: E402
 from renamer import Journal, RenameError, execute as execute_rename, undo_rename  # noqa: E402
 from rrslog import RrsLog, summarize  # noqa: E402
 from scanner import engines as scanner_engines  # noqa: E402
@@ -131,6 +131,16 @@ PREV_CACHE_MAX = 80 * 1024 * 1024
 THUMB_CACHE: dict[tuple[str, int], bytes] = {}
 
 
+def _register_session_previews(folder: Path, items: list) -> None:
+    """Регистрация hash -> Path для всех кадров сессии (включая режим names)."""
+    for it in items:
+        for fr in it.get('frames', []):
+            h = fr.get('preview')
+            name = fr.get('name')
+            if h and name:
+                state.file_registry[h] = folder / name
+
+
 def _get_preview(path: Path) -> Optional[bytes]:
     """Встроенный JPEG файла (с LRU-кэшем). hash → path регистрируется.
 
@@ -176,6 +186,15 @@ def _set_zayavka(path: Path) -> None:
     state.zayavka_path = Path(path)
 
 
+def _norm_excel(v) -> Optional[str]:
+    if v is None:
+        return None
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    s = str(v).strip()
+    return s or None
+
+
 def _apply_lookup(it: dict, r: dict) -> None:
     it['lm_code'] = r['lm']
     it['product_name'] = r.get('name')
@@ -201,13 +220,23 @@ def _enrich(items: list, session_id: Optional[str] = None) -> None:
 
     todo: list[dict] = []
     for it in items:
-        if not it.get('barcode'):
-            continue
-        r = state.lookup.find_local(it['barcode'], state.zayavka)
-        if r['source'] is not None:
-            _apply_lookup(it, r)
-        else:
-            todo.append(it)
+        if it.get('barcode'):
+            r = state.lookup.find_local(it['barcode'], state.zayavka)
+            if r['source'] is not None:
+                _apply_lookup(it, r)
+            else:
+                todo.append(it)
+        elif it.get('lm_code') and state.zayavka is not None:
+            # v3.6: товар уже переименован или назван по коду LM
+            row = state.zayavka.find_row(lm=it['lm_code'])
+            if row:
+                gtin = _norm_excel(state.zayavka.ws.cell(row, 4).value)
+                name = _norm_excel(state.zayavka.ws.cell(row, 3).value)
+                it['barcode'] = gtin
+                it['product_name'] = name
+                it['excel_row'] = row
+                it['lookup_source'] = 'zayavka'
+                it['status'] = 'ok' if it['has_label'] else 'warn'
 
     api_found = 0
     if todo and state.lookup.enabled and not state.lookup.api_down():
@@ -338,6 +367,7 @@ def h_open_folder(p):
         state.items = res['items']
         state.folder = folder
         state.mode = mode
+        _register_session_previews(folder, state.items)
         _save_last_session()
         log('open_folder', session_id=p.get('_session'), folder=folder.name,
             mode=mode, items=len(res['items']), frames=res['total_frames'],
@@ -405,10 +435,47 @@ def h_suffix(p):
         if suf:
             if not suf.startswith('_'):
                 suf = '_' + suf
+            suf_lower = suf.lower()
+            if suf_lower in ('_y', '_у'):
+                # Назначение кадра этикеткой
+                for k, f in enumerate(it['frames']):
+                    f['is_label'] = (k == i)
+                it['frames'][i]['suffix_custom'] = None
+                it['has_label'] = True
+                if it.get('barcode'):
+                    it['status'] = 'ok'
+                return {'frames': it['frames'], 'has_label': True, 'status': it['status']}
             if not re.fullmatch(r'_(?:\d{1,4}|com|pack|ins|tag)', suf):
-                raise RpcError(4000, 'Допустимые суффиксы: _NN, _com, _pack, _ins, _tag')
+                raise RpcError(4000, 'Допустимые суффиксы: _NN, _com, _pack, _ins, _tag, _y')
+        # Если кадр был этикеткой, а ему задали другой суффикс
+        if it['frames'][i].get('is_label') and suf:
+            it['frames'][i]['is_label'] = False
         it['frames'][i]['suffix_custom'] = suf or None
-        return {'frames': it['frames']}
+        it['has_label'] = any(f.get('is_label') for f in it['frames'])
+        if not it['has_label'] and it.get('barcode'):
+            it['status'] = 'warn'
+        return {'frames': it['frames'], 'has_label': it['has_label'], 'status': it['status']}
+
+
+@method('session.toggle_frame_label')
+def h_toggle_label(p):
+    """Сделать кадр этикеткой (_y) или снять отметку этикетки."""
+    with LOCK:
+        it = _item(p['item_id'])
+        i = int(p['idx'])
+        if not (0 <= i < len(it['frames'])):
+            raise RpcError(4000, 'Индекс вне диапазона')
+        was_label = bool(it['frames'][i].get('is_label'))
+        if was_label:
+            it['frames'][i]['is_label'] = False
+        else:
+            for k, f in enumerate(it['frames']):
+                f['is_label'] = (k == i)
+            it['frames'][i]['suffix_custom'] = None
+        it['has_label'] = any(f.get('is_label') for f in it['frames'])
+        if it.get('barcode'):
+            it['status'] = 'ok' if it['has_label'] else 'warn'
+        return {'frames': it['frames'], 'has_label': it['has_label'], 'status': it['status']}
 
 
 @method('session.apply_barcode')
@@ -552,19 +619,24 @@ def h_plan(p):
                                 'reason': 'нет ШК' if not it['barcode'] else 'нет кода LM'})
                 continue
             rows.extend(plan_item(it, it['lm_code']))
-        # v3.3: дублирующий код LM в заявке → два товара претендуют на одно имя
+        # v3.3 / v3.6: проверка коллизий имен (между разными товарами и внутри одного)
         seen: dict[str, list[str]] = {}
         for r in rows:
             seen.setdefault(r['dst'], []).append(r['item_id'])
-        dups = {dst: ids for dst, ids in seen.items() if len(set(ids)) > 1}
+        dups = {dst: item_ids for dst, item_ids in seen.items() if len(item_ids) > 1}
         if dups:
-            dst, ids = next(iter(dups.items()))
-            by_id = {it['id']: it for it in state.items}
-            lms = {str(by_id[i]['lm_code']) for i in ids if i in by_id}
-            raise RpcError(4090,
-                           f'Коллизия именования: {dst} — код LM {", ".join(sorted(map(str, lms)))} '
-                           f'встречается у нескольких товаров. Проверьте дубли в заявке '
-                           f'(колонка A).')
+            dst, dup_ids = next(iter(dups.items()))
+            if len(set(dup_ids)) > 1:
+                by_id = {it['id']: it for it in state.items}
+                lms = {str(by_id[i]['lm_code']) for i in dup_ids if i in by_id}
+                raise RpcError(4090,
+                               f'Коллизия именования: {dst} — код LM {", ".join(sorted(map(str, lms)))} '
+                               f'встречается у нескольких товаров. Проверьте дубли в заявке '
+                               f'(колонка A).')
+            else:
+                raise RpcError(4090,
+                               f'Коллизия именования: внутри товара два кадра претендуют на одно имя {dst}. '
+                               f'Проверьте пользовательские суффиксы.')
         return {'rows': rows, 'skipped': skipped,
                 'xlsx': str(state.zayavka_path) if state.zayavka_path else None,
                 'items_count': len(items) - len(skipped)}
@@ -577,6 +649,8 @@ def h_exec(p):
         if not plan['rows']:
             raise RpcError(4000, 'Нечего переименовывать — товары без кода LM пропущены')
         base = state.folder
+        if base is None or not base.is_dir():
+            raise RpcError(4000, 'Папка сессии не открыта или не найдена')
         pairs = [{'src': str(base / r['src']), 'dst': str(base / r['dst'])}
                  for r in plan['rows']]
         t0 = time.time()
@@ -598,8 +672,20 @@ def h_exec(p):
         })
         log('rename_execute', session_id=p.get('_session'), renamed=len(renamed_log),
             xlsx_locked=locked, elapsed_ms=round((time.time() - t0) * 1000))
+
+        # v3.6: rescan папки после успешного переименования — актуализация state.items
+        if state.folder is not None:
+            try:
+                scan_res = scan_folder(state.folder, state.mode, preview_loader=_get_preview)
+                _enrich(scan_res['items'])
+                state.items = scan_res['items']
+                _register_session_previews(state.folder, state.items)
+            except Exception as e:
+                log('exec_rescan_error', level='warn', error=str(e))
+
         return {
             'renamed': len(renamed_log),
+            'items': state.items,
             'xlsx': {'updated': sum(1 for c in (changed or []) if not c.get('added')),
                      'added': sum(1 for c in (changed or []) if c.get('added')),
                      'locked': locked, 'message': xlsx_msg},
@@ -646,6 +732,7 @@ def h_undo(p):
                 scan_res = scan_folder(state.folder, state.mode, preview_loader=_get_preview)
                 _enrich(scan_res['items'])
                 state.items = scan_res['items']
+                _register_session_previews(state.folder, state.items)
             except Exception:
                 pass
         return {'restored': n, 'missing': undo_res['missing'], 'xlsx': xlsx_done,
@@ -841,6 +928,33 @@ async def upload(file: UploadFile = File(...), dir: str = Form('')):
 def preview(fh: str, size: int = 320):
     size = max(64, min(int(size), 4096))
     path = state.file_registry.get(fh)
+
+    # Lazy-resolve: если хэш не найден в registry (например, режим names или сброс кэша)
+    if (path is None or not path.is_file()) and state.folder is not None:
+        # 1. Поиск по текущим items сессии
+        for it in state.items:
+            for fr in it.get('frames', []):
+                if fr.get('preview') == fh:
+                    cand = state.folder / fr['name']
+                    if cand.is_file():
+                        path = cand
+                        state.file_registry[fh] = path
+                        break
+            if path is not None:
+                break
+
+        # 2. Поиск по файлам папки
+        if path is None or not path.is_file():
+            try:
+                for f in state.folder.iterdir():
+                    if f.is_file() and f.suffix.lower() in RAW_EXTS:
+                        if file_hash(f) == fh:
+                            path = f
+                            state.file_registry[fh] = path
+                            break
+            except OSError:
+                pass
+
     if path is None or not path.is_file():
         return JSONResponse({'error': 'not found'}, status_code=404)
     prev = state.preview_cache_get(fh) if hasattr(state, 'preview_cache_get') else PREV_CACHE.get(fh)
@@ -912,6 +1026,7 @@ def _restore_last_session() -> None:
         state.items = res['items']
         state.folder = folder
         state.mode = d.get('mode', 'cv')
+        _register_session_previews(folder, state.items)
         log('restore_session', folder=folder.name, items=len(res['items']))
     except Exception as e:
         log('restore_session', level='error', error=f'{type(e).__name__}: {e}')

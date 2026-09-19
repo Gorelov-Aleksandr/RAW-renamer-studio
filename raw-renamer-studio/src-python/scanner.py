@@ -15,32 +15,67 @@ import io
 import re
 from typing import Optional
 
-import numpy as np
 from PIL import Image
 
-try:
-    import cv2  # type: ignore
-except ImportError:  # pragma: no cover
-    cv2 = None
+_cv2 = None
+_cv2_loaded = False
 
-try:
-    import zxingcpp  # type: ignore
-except ImportError:  # pragma: no cover
-    zxingcpp = None
 
-try:
-    from pyzbar import pyzbar  # type: ignore
-except ImportError:  # pragma: no cover
-    pyzbar = None
+def _get_cv2():
+    global _cv2, _cv2_loaded
+    if not _cv2_loaded:
+        _cv2_loaded = True
+        try:
+            import cv2  # type: ignore
+            _cv2 = cv2
+        except ImportError:  # pragma: no cover
+            _cv2 = None
+    return _cv2
+
+
+_zxingcpp = None
+_zxingcpp_loaded = False
+
+
+def _get_zxing():
+    global _zxingcpp, _zxingcpp_loaded
+    if not _zxingcpp_loaded:
+        _zxingcpp_loaded = True
+        try:
+            import zxingcpp  # type: ignore
+            _zxingcpp = zxingcpp
+        except ImportError:  # pragma: no cover
+            _zxingcpp = None
+    return _zxingcpp
+
+
+_pyzbar = None
+_pyzbar_loaded = False
+
+
+def _get_pyzbar():
+    global _pyzbar, _pyzbar_loaded
+    if not _pyzbar_loaded:
+        _pyzbar_loaded = True
+        try:
+            from pyzbar import pyzbar  # type: ignore
+            _pyzbar = pyzbar
+        except ImportError:  # pragma: no cover
+            _pyzbar = None
+    return _pyzbar
+
 
 MAX_DIM = 1600  # декодируем не крупнее этого — превью 24 Мп слишком медленно
 
 
 def engines() -> dict:
+    c = _get_cv2()
+    z = _get_zxing()
+    p = _get_pyzbar()
     return {
-        'opencv': cv2 is not None and hasattr(cv2, 'barcode'),
-        'zxing': zxingcpp is not None,
-        'pyzbar': pyzbar is not None,
+        'opencv': c is not None and hasattr(c, 'barcode'),
+        'zxing': z is not None,
+        'pyzbar': p is not None,
     }
 
 
@@ -60,15 +95,20 @@ def _opencv_find(bgr) -> list[dict]:
     """OpenCV 4.x и 5.x: сигнатуры возвращаемых значений разные — берём
     массив строк текстно-безопасно."""
     out: list[dict] = []
-    if cv2 is None or not hasattr(cv2, 'barcode'):
+    c = _get_cv2()
+    if c is None or not hasattr(c, 'barcode'):
         return out
-    det = cv2.barcode_BarcodeDetector()
+    det = c.barcode_BarcodeDetector()
     texts = None
     try:
         res = det.detectAndDecode(bgr)
         if isinstance(res, tuple):
             for item in res:
-                if isinstance(item, (list, tuple, np.ndarray)):
+                if isinstance(item, (list, tuple)):
+                    texts = item
+                    break
+                # numpy ndarray check without top-level import
+                if getattr(item, '__class__', None) and 'ndarray' in str(type(item)):
                     texts = item
                     break
     except Exception:
@@ -78,6 +118,7 @@ def _opencv_find(bgr) -> list[dict]:
             texts = None
     if texts is not None:
         try:
+            import numpy as np
             for t in np.atleast_1d(np.asarray(texts, dtype=object)).ravel():
                 s = str(t).strip()
                 if not s or s.lower() in ('none', 'null'):
@@ -109,10 +150,13 @@ def _ean13_ok(s: str) -> bool:
 
 def _zxing_find(im) -> list[dict]:
     out: list[dict] = []
+    z = _get_zxing()
+    if z is None:
+        return out
     # zxing-cpp >= 3.0: read_barcodes
-    if hasattr(zxingcpp, 'read_barcodes'):
+    if hasattr(z, 'read_barcodes'):
         try:
-            res = zxingcpp.read_barcodes(im)
+            res = z.read_barcodes(im)
         except Exception:
             res = []
         for r in (res or []):
@@ -128,12 +172,12 @@ def _zxing_find(im) -> list[dict]:
         return out
     # zxing-cpp 2.x: decode_multi / decode
     try:
-        res = list(zxingcpp.decode_multi(im) or [])
+        res = list(z.decode_multi(im) or [])
     except Exception:
         res = []
     if not res:
         try:
-            r = zxingcpp.decode(im)
+            r = z.decode(im)
             if getattr(r, 'valid', True) and (getattr(r, 'text', '') or '').strip():
                 res = [r]
         except Exception:
@@ -165,16 +209,18 @@ def detect(jpeg: bytes) -> list[dict]:
     found: list[dict] = []
 
     # ---- Контур 1: OpenCV ----
-    if cv2 is not None and hasattr(cv2, 'barcode'):
+    c = _get_cv2()
+    if c is not None and hasattr(c, 'barcode'):
         try:
+            import numpy as np
             arr = np.frombuffer(jpeg, dtype=np.uint8)
-            bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            bgr = c.imdecode(arr, c.IMREAD_COLOR)
             if bgr is not None:
                 h, w = bgr.shape[:2]
                 if max(h, w) > MAX_DIM:
                     k = MAX_DIM / max(h, w)
-                    bgr = cv2.resize(bgr, (int(w * k), int(h * k)),
-                                     interpolation=cv2.INTER_AREA)
+                    bgr = c.resize(bgr, (int(w * k), int(h * k)),
+                                   interpolation=c.INTER_AREA)
                 found = _opencv_find(bgr)
         except Exception:
             found = []
@@ -183,7 +229,8 @@ def detect(jpeg: bytes) -> list[dict]:
         return _norm(found)
 
     # ---- Контур 2: ZXing-cpp ----
-    if zxingcpp is not None:
+    z = _get_zxing()
+    if z is not None:
         im = _load_gray(jpeg)
         if im is not None:
             found = _zxing_find(im)
@@ -192,11 +239,12 @@ def detect(jpeg: bytes) -> list[dict]:
         return _norm(found)
 
     # ---- Контур 3: PyZBar (опционально) ----
-    if pyzbar is not None:
+    pz = _get_pyzbar()
+    if pz is not None:
         im = _load_gray(jpeg)
         if im is not None:
             try:
-                for r in pyzbar.decode(im):
+                for r in pz.decode(im):
                     s = r.data.decode('ascii', 'ignore').strip()
                     if s:
                         found.append({'text': s, 'format': str(r.type), 'engine': 'pyzbar'})

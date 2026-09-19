@@ -14,17 +14,22 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
-
 COL = {
     'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5, 'F': 6, 'G': 7, 'H': 8, 'I': 9,
     'J': 10, 'K': 11, 'L': 12, 'M': 13, 'N': 14, 'O': 15, 'P': 16, 'Q': 17,
     'R': 18, 'S': 19, 'T': 20, 'U': 21,
 }
 
-NEW_ROW_FILL = PatternFill('solid', fgColor='FFF3C4')
 LOCK_MSG = 'Закройте файл в Excel и нажмите «Повторить»'
+_NEW_ROW_FILL = None
+
+
+def _get_new_row_fill():
+    global _NEW_ROW_FILL
+    if _NEW_ROW_FILL is None:
+        from openpyxl.styles import PatternFill
+        _NEW_ROW_FILL = PatternFill('solid', fgColor='FFF3C4')
+    return _NEW_ROW_FILL
 
 
 class XlsxLockedError(Exception):
@@ -47,6 +52,7 @@ class ExcelWorker:
         if not self.path.exists():
             raise FileNotFoundError(f'Заявка не найдена: {self.path}')
         self._check_writable()
+        from openpyxl import load_workbook
         self.wb = load_workbook(self.path)
         self.ws = self.wb.active
         self.by_lm: dict[str, int] = {}
@@ -118,7 +124,7 @@ class ExcelWorker:
                 if constants.get('photographer'):
                     self.ws.cell(row, COL['P'], constants['photographer'])
                 for c in range(1, 22):
-                    self.ws.cell(row, c).fill = NEW_ROW_FILL
+                    self.ws.cell(row, c).fill = _get_new_row_fill()
             old_l = self.ws.cell(row, COL['L']).value
             old_m = self.ws.cell(row, COL['M']).value
             self.ws.cell(row, COL['L'], int(u['L']))

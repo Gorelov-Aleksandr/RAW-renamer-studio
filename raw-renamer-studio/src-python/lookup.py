@@ -14,9 +14,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Optional
-
-import httpx
+from typing import Any, Optional
 
 APIM = {
     'preprod': {
@@ -63,7 +61,7 @@ class Lookup:
         self._lock = threading.Lock()
         self._api_fail_count = 0
         self._api_down_until = 0.0
-        self._client: Optional[httpx.Client] = None
+        self._client: Any = None
 
     # ------------------------------------------------------------------- API
     def find(self, barcode: str, worker=None) -> dict:
@@ -131,8 +129,9 @@ class Lookup:
                 (barcode, lm, name, source, time.strftime('%Y-%m-%d %H:%M:%S')))
             self.db.commit()
 
-    def _client_or(self) -> httpx.Client:
+    def _client_or(self):
         if self._client is None:
+            import httpx
             self._client = httpx.Client(timeout=self.timeout)
         return self._client
 

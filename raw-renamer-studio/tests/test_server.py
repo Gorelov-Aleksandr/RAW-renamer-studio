@@ -15,6 +15,11 @@ from pathlib import Path
 
 import pytest
 
+sys_path = Path(__file__).resolve().parent.parent / 'src-python'
+import sys
+if str(sys_path) not in sys.path:
+    sys.path.insert(0, str(sys_path))
+
 from conftest import make_jpeg
 
 
@@ -480,3 +485,155 @@ class TestRawEngine:
         r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names'})
         assert r['total_frames'] == 6
         assert len(r['items']) == 6  # без ШК в имени — по одному товару на файл
+
+
+class TestV36Fixes:
+    """Проверка закрытия инцидентов v3.6 (Mac): превью в names-режиме, товары без _y, атомарный rollback, rescan."""
+
+    def test_names_mode_previews_registered(self, sc, tmp_path):
+        d = tmp_path / 'names_batch'
+        d.mkdir()
+        f1 = d / '4650101098770_y.CR2'
+        f2 = d / '4650101098770_01.CR2'
+        make_jpeg(f1, seed=1)
+        make_jpeg(f2, seed=2)
+
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names'})
+        assert len(r['items']) == 1
+        it = r['items'][0]
+        assert len(it['frames']) == 2
+
+        # В names-режиме превью каждого файла зарегистрировано и отдается со статусом 200
+        for fr in it['frames']:
+            h = fr['preview']
+            st, body = sc.http(f'/preview/{h}?size=160', method='GET')
+            assert st == 200
+            assert body[:2] == b'\xff\xd8'
+
+    def test_no_label_rename_and_excel(self, sc, tmp_path):
+        """Товары без этикетки (_y) переименовываются в {lm}.CR2, {lm}_01.CR2 с M=0 в Excel."""
+        d = tmp_path / 'no_label_batch'
+        d.mkdir()
+        f1 = d / '4650101098794_01.CR2'
+        f2 = d / '4650101098794_02.CR2'
+        make_jpeg(f1, seed=10)
+        make_jpeg(f2, seed=11)
+
+        # Создаем заявку
+        z_path = tmp_path / 'zayavka.xlsx'
+        from pim_builder import build_xlsx
+        build_xlsx([{'lm': '89458032', 'name': 'Товар без этикетки', 'otdel': '3',
+                     'gtin': '4650101098794', 'model': 'M1', 'gamma': 'А'}], z_path)
+
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names', 'zayavka': str(z_path)})
+        it = r['items'][0]
+        assert it['has_label'] is False
+        assert it['status'] == 'warn'  # предупреждение "Без этикетки", но не ошибка
+
+        plan = sc.ok('renamer.plan', {'item_ids': [it['id']]})
+        assert len(plan['rows']) == 2
+        # Первый ракурс становится главным {lm}.CR2
+        assert plan['rows'][0]['dst'] == '89458032.CR2'
+        assert plan['rows'][0]['kind'] == 'main'
+        # Второй ракурс становится {lm}_01.CR2
+        assert plan['rows'][1]['dst'] == '89458032_01.CR2'
+        assert plan['rows'][1]['kind'] == 'angle'
+
+        # Выполняем переименование
+        res = sc.ok('renamer.execute', {'item_ids': [it['id']]})
+        assert res['renamed'] == 2
+        # После execute файлы переименованы на диске
+        assert (d / '89458032.CR2').is_file()
+        assert (d / '89458032_01.CR2').is_file()
+        assert not f1.exists()
+        assert not f2.exists()
+
+        # В Excel записано L=2, M=0
+        from excel_worker import ExcelWorker
+        w = ExcelWorker(z_path)
+        row = w.find_row('89458032')
+        assert row is not None
+        assert w.ws.cell(row, 12).value == 2
+        assert w.ws.cell(row, 13).value == 0
+
+        # Сессия обновилась: items возвращены свежими с новыми именами
+        assert 'items' in res
+        new_items = res['items']
+        assert len(new_items) == 1
+        new_frame_names = [fr['name'] for fr in new_items[0]['frames']]
+        assert '89458032.CR2' in new_frame_names
+        assert '89458032_01.CR2' in new_frame_names
+
+    def test_duplicate_custom_suffix_collision(self, sc, tmp_path):
+        """Дубликат целевого имени внутри одного товара отклоняется в h_plan с кодом 4090."""
+        d = tmp_path / 'dup_batch'
+        d.mkdir()
+        make_jpeg(d / '4650101098770_y.CR2', seed=20)
+        make_jpeg(d / '4650101098770_01.CR2', seed=21)
+        make_jpeg(d / '4650101098770_02.CR2', seed=22)
+
+        z_path = tmp_path / 'z_dup.xlsx'
+        from pim_builder import build_xlsx
+        build_xlsx([{'lm': '89458028', 'name': 'Тест', 'otdel': '3',
+                     'gtin': '4650101098770', 'model': 'M', 'gamma': 'А'}], z_path)
+
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names', 'zayavka': str(z_path)})
+        item_id = r['items'][0]['id']
+
+        # Зададим обоим ракурсам одинаковый кастомный суффикс _pack
+        sc.ok('session.set_frame_suffix', {'item_id': item_id, 'idx': 1, 'suffix': '_pack'})
+        sc.ok('session.set_frame_suffix', {'item_id': item_id, 'idx': 2, 'suffix': '_pack'})
+
+        err = sc.err('renamer.plan', {'item_ids': [item_id]})
+        assert 'Коллизия именования' in err['message']
+
+    def test_set_suffix_label_toggle(self, sc, tmp_path):
+        """Назначение суффикса _y (латиница или кириллица) делает кадр этикеткой."""
+        d = tmp_path / 'toggle_batch'
+        d.mkdir()
+        make_jpeg(d / '4650101098794_01.CR2', seed=30)
+        make_jpeg(d / '4650101098794_02.CR2', seed=31)
+
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names'})
+        it = r['items'][0]
+        assert it['has_label'] is False
+        assert it['frames'][0]['is_label'] is False
+
+        # Назначаем первый кадр этикеткой через русское '_у'
+        res = sc.ok('session.set_frame_suffix', {'item_id': it['id'], 'idx': 0, 'suffix': '_у'})
+        assert res['has_label'] is True
+        assert res['frames'][0]['is_label'] is True
+        assert res['frames'][1]['is_label'] is False
+
+        # Переключаем обратно
+        res2 = sc.ok('session.toggle_frame_label', {'item_id': it['id'], 'idx': 0})
+        assert res2['has_label'] is False
+        assert res2['frames'][0]['is_label'] is False
+
+    def test_rename_atomic_rollback(self, sc, tmp_path):
+        """Если при execute возникает коллизия, ни один файл не остаётся полупереименованным."""
+        from renamer import execute, RenameError
+        d = tmp_path / 'atomic_batch'
+        d.mkdir()
+        f1 = d / 'a.CR2'
+        f2 = d / 'b.CR2'
+        f1.write_bytes(b'file1')
+        f2.write_bytes(b'file2')
+
+        # Создадим конфликт: целевой файл 'target2.CR2' уже существует на диске
+        conflict = d / 'target2.CR2'
+        conflict.write_bytes(b'already_here')
+
+        pairs = [
+            {'src': str(f1), 'dst': str(d / 'target1.CR2')},
+            {'src': str(f2), 'dst': str(conflict)},
+        ]
+
+        with pytest.raises(RenameError):
+            execute(pairs)
+
+        # Проверяем, что f1 остался нетронутым (не переименовался в target1 и не пропал)
+        assert f1.is_file() and f1.read_bytes() == b'file1'
+        assert f2.is_file() and f2.read_bytes() == b'file2'
+        assert not (d / 'target1.CR2').exists()
+        assert conflict.read_bytes() == b'already_here'
