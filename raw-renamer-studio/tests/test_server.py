@@ -123,6 +123,27 @@ class TestSession:
         assert len(r['items']) == 22
         assert all(i['source'] == 'orphan' for i in r['items'])
 
+    def test_cyrillic_u_label_suffix(self, sc, tmp_path, batch):
+        # v3.5: «у» (кириллица, русская раскладка) = суффикс этикетки,
+        # как и латинская «y» (унаследовано от первой версии инструмента).
+        d = tmp_path / 'cyr'
+        d.mkdir()
+        # ШК из тестовой заявки (89458028 → 4650101098817)
+        make_jpeg(d / '4650101098817.CR2', seed=11)
+        make_jpeg(d / '4650101098817_у.CR2', seed=12)
+        sc.ok('session.set_zayavka', {'path': str(batch.zayavka)})
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names'})
+        assert len(r['items']) == 1
+        it = r['items'][0]
+        assert it['has_label'] is True
+        assert it['lm_code'] == '89458028'
+        plan = sc.ok('renamer.plan', {'item_ids': [it['id']]})
+        dsts = {row['dst'] for row in plan['rows']}
+        assert '89458028_y.CR2' in dsts  # написание в плане — всегда лат. y
+        assert '89458028.CR2' in dsts
+        # не оставляем заявку в общей сессии для следующих тестов
+        sc.ok('session.set_zayavka', {'path': None})
+
     def test_special_chars_in_folder(self, sc, tmp_path):
         d = tmp_path / 'съёмка №1 (копия)'
         d.mkdir()
@@ -448,3 +469,14 @@ class TestRawEngine:
         make_jpeg(d / '_NEF.NEF', seed=4)
         r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'cv'})
         assert r['total_frames'] == 2
+
+    def test_rare_raw_extensions(self, sc, tmp_path):
+        # v3.5: редкие форматы (унаследовано от первой версии инструмента)
+        # тоже распознаются как RAW: .crw .srf .sr2 .3fr .fff .raw
+        d = tmp_path / 'rare'
+        d.mkdir()
+        for ext in ['.crw', '.srf', '.sr2', '.3fr', '.fff', '.raw']:
+            (d / f'file{ext}').write_bytes(b'\x00' * 512)
+        r = sc.ok('session.open_folder', {'folder': str(d), 'mode': 'names'})
+        assert r['total_frames'] == 6
+        assert len(r['items']) == 6  # без ШК в имени — по одному товару на файл

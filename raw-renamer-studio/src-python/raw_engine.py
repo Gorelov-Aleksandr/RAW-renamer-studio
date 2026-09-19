@@ -18,6 +18,10 @@ from PIL import Image
 RAW_EXTS = {
     '.cr2', '.cr3', '.arw', '.nef', '.orf', '.rw2',
     '.dng', '.raf', '.nrw', '.pef', '.x3f',
+    # v3.5: редкие/старые форматы (унаследовано от первой версии инструмента):
+    # CRW (Canon до 2003), SR2/SRF (Sony), 3FR (Hasselblad), FFF (старый Fuji),
+    # .raw (общее). Превью может не извлечься — файл всё равно виден в партии.
+    '.crw', '.srf', '.sr2', '.3fr', '.fff', '.raw',
 }
 
 _SOI = b'\xff\xd8\xff'
