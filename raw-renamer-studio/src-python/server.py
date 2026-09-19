@@ -997,12 +997,23 @@ def _say(msg: str) -> None:
 
 
 def _watchdog(timeout: float) -> None:
+    initial_ppid = os.getppid()
     while True:
-        time.sleep(1.0)
-        if time.time() - state.last_beat > timeout:
-            _say('SIDECAR: нет heartbeat дольше '
-                 f'{timeout:.0f} c — exit(0)')
+        time.sleep(2.0)
+        # 1. Завершение родительского процесса (Rust/Tauri)
+        current_ppid = os.getppid()
+        if current_ppid != initial_ppid or current_ppid == 1:
+            _say('SIDECAR: родительский процесс завершился — exit(0)')
             os._exit(0)
+
+        # 2. Защита от зависания: завершаемся только если нет heartbeat дольше max(timeout, 120s)
+        # И только если родитель уже не живёт нормально
+        if timeout > 0:
+            elapsed = time.time() - state.last_beat
+            max_allowed = max(timeout, 120.0)
+            if elapsed > max_allowed:
+                _say(f'SIDECAR: нет heartbeat дольше {elapsed:.0f} c — exit(0)')
+                os._exit(0)
 
 
 def _restore_last_session() -> None:
@@ -1084,22 +1095,16 @@ def main() -> None:
         except (FileNotFoundError, XlsxLockedError) as e:
             print(f'SIDECAR: заявка недоступна: {e}', file=sys.stderr, flush=True)
 
-    # v3.3: восстановление последней сессии (до READY — фронт сразу видит данные)
-    _restore_last_session()
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((a.host, a.port))
     port = sock.getsockname()[1]
     sock.set_inheritable(True)
     state.port = port
+    state.last_beat = time.time()
 
     if a.watchdog > 0:
         threading.Thread(target=_watchdog, args=(a.watchdog,), daemon=True).start()
 
-    # v3.3: READY объявляется ТОЛЬКО когда uvicorn реально принимает запросы
-    # (раньше порт-файл/READY писались до accept → первый RPC мог получить
-    # ConnectionRefused). Порт-файл пишется в тот же момент — dev-прокси
-    # гарантированно попадает в живой сервер.
     config = uvicorn.Config(app, host=a.host, port=port,
                             log_level='warning', access_log=False)
     server = uvicorn.Server(config)
@@ -1112,6 +1117,7 @@ def main() -> None:
     def _announce():
         while not server.started:
             time.sleep(0.05)
+        state.last_beat = time.time()
         _boot_stage('listen')  # uvicorn реально принимает соединения
         if a.port_file:
             pf = Path(a.port_file)

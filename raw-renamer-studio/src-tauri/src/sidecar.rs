@@ -359,12 +359,10 @@ fn dev_command() -> (String, Vec<String>) {
             base.join(".sidecar").join("port").to_string_lossy().into_owned(),
             "--data-dir".into(),
             base.join(".data").to_string_lossy().into_owned(),
-            // v3.3 (D2): 30 с вместо 8 — App Nap / сон Mac гасят JS-таймеры
-            // WebView, heartbeat (каждые 3 с) на время «засыпает»; 8 с давал
-            // ложную смерть движка. 30 с — запас для Nap, но зомби всё равно
-            // убирается (и kill_sidecar при выходе приложения).
+            // v3.3 (D2) / v3.6: 120 с — App Nap / сон Mac гасят JS-таймеры
+            // WebView; 120 с даёт устойчивость, а при выходе приложение убивается нативно.
             "--watchdog".into(),
-            "30".into(),
+            "120".into(),
         ],
     )
 }
@@ -461,9 +459,9 @@ fn build_command<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(String, Vec<S
         vec![
             "--port".into(),
             "0".into(),
-            // v3.3 (D2): 30 с вместо 8 (App Nap — см. dev_command).
+            // v3.6: 120 с вместо 30 (защита от ложной смерти при App Nap).
             "--watchdog".into(),
-            "30".into(),
+            "120".into(),
         ],
     ))
 }

@@ -170,7 +170,23 @@ export async function importFilesAndOpen(
 export function pickFolder(opts: PickOptions = {}): Promise<void> {
   const st = useSession.getState();
   if (!st.online) {
-    st.toast('warn', 'Движок не отвечает', 'Выбор папки недоступен — запустите приложение заново');
+    if (st.engineState === 'starting') {
+      st.toast('info', 'Запуск движка…', 'Подождите пару секунд, движок запускается');
+      const start = Date.now();
+      const waitOnline = async (): Promise<boolean> => {
+        while (Date.now() - start < 8000) {
+          await new Promise((r) => setTimeout(r, 250));
+          if (useSession.getState().online) return true;
+        }
+        return false;
+      };
+      return waitOnline().then((ok) => {
+        if (ok) return pickFolder(opts);
+        useSession.getState().toast('warn', 'Движок не отвечает', 'Попробуйте ещё раз');
+        opts.onDone?.(false);
+      });
+    }
+    st.toast('warn', 'Движок не отвечает', 'Выбор папки недоступен — проверьте статус движка');
     Promise.resolve().then(() => opts.onDone?.(false));
     return Promise.resolve();
   }

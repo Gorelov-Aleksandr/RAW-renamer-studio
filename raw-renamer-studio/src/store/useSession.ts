@@ -133,7 +133,14 @@ export const useSession = create<AppState>()((set, get) => ({
           if (e.stage === 0 || e.stage > cur) set({ bootStage: e.stage });
         }
         if (e.kind === 'ready') {
-          set({ bootStage: 3 });
+          set({ bootStage: 3, engineState: 'online', online: true });
+          void (async () => {
+            try {
+              set({ info: await sc.rpc<SystemInfo>('system.info') });
+            } catch {
+              /* движок не отвечает — баннер offline покажет состояние */
+            }
+          })();
         }
         // 'ready' — уже обработан внутри клиента (baseUrl + online)
       },
