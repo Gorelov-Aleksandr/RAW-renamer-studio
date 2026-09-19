@@ -18,10 +18,6 @@ import csv
 import io
 from pathlib import Path
 
-from openpyxl import Workbook
-from openpyxl.styles import Font
-from openpyxl.utils import get_column_letter
-
 HEADERS = [
     'Код LM', 'Отдел', 'Товар', 'GTIN', 'Дата съемки', 'Дата AVS', 'Гамма',
     'Модель ADEO', 'Ссылка на фотобук', 'Постащик', 'Организация', 'Итого ракурсов',
@@ -202,6 +198,10 @@ def _row_values(r: dict, c: dict) -> list:
 
 
 def build_xlsx(rows: list[dict], out_path, constants: dict | None = None) -> Path:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
     c = {**DEFAULTS, **(constants or {})}
     wb = Workbook()
     ws = wb.active

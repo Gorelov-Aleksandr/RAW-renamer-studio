@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { CSS } from '@dnd-kit/utilities';
 import {
   DndContext, PointerSensor, closestCenter, useSensor, useSensors,
@@ -7,11 +7,15 @@ import {
 import {
   SortableContext, horizontalListSortingStrategy, useSortable,
 } from '@dnd-kit/sortable';
-import { X, ZoomIn, Pencil } from 'lucide-react';
+import { X, ZoomIn, Pencil, Tag } from 'lucide-react';
 import type { Frame, Item } from '../types';
 import { useSession } from '../store/useSession';
 import * as sc from '../lib/sidecar';
 import { cx } from '../lib/cx';
+
+const MIN_RIGHT_WIDTH = 260;
+const MAX_RIGHT_WIDTH = 540;
+const DEFAULT_RIGHT_WIDTH = 320;
 
 function rankInClean(item: Item, idx: number): number {
   let rank = 0;
@@ -23,12 +27,13 @@ function rankInClean(item: Item, idx: number): number {
 }
 
 function SortableFrame({
-  item, f, i, onSuffix, onOpen,
+  item, f, i, onSuffix, onToggleLabel, onOpen,
 }: {
   item: Item;
   f: Frame;
   i: number;
   onSuffix: (s: string | null) => void;
+  onToggleLabel: () => void;
   onOpen: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -55,29 +60,44 @@ function SortableFrame({
       {...listeners}
       {...attributes}
       className={cx(
-        'shrink-0 w-[76px] rounded-md border p-1 bg-surface cursor-grab active:cursor-grabbing touch-none',
+        'shrink-0 w-[78px] rounded-md border p-1 bg-surface cursor-grab active:cursor-grabbing touch-none relative group',
         isDragging ? 'opacity-70 ring-1 ring-accent/50 border-accent/40 z-10' : 'border-white/10',
       )}
     >
-      <button
-        onClick={onOpen}
-        title={f.name}
-        className="relative block w-full h-[52px] rounded bg-[#0F1015] overflow-hidden"
-      >
-        {f.preview && (
-          <img
-            src={sc.previewUrl(f.preview, 120)}
-            alt=""
-            draggable={false}
-            className="w-full h-full object-cover"
-          />
-        )}
-        {f.is_label && (
-          <span className="absolute bottom-0.5 right-0.5 text-[8px] font-mono bg-black/65 text-warm px-1 rounded">
-            y
-          </span>
-        )}
-      </button>
+      <div className="relative block w-full h-[54px] rounded bg-[#0F1015] overflow-hidden">
+        <button
+          onClick={onOpen}
+          title={`${f.name} — клик для полноэкранного просмотра`}
+          className="w-full h-full block"
+        >
+          {f.preview && (
+            <img
+              src={sc.previewUrl(f.preview, 120)}
+              alt=""
+              draggable={false}
+              className="w-full h-full object-cover"
+            />
+          )}
+        </button>
+
+        {/* Бейдж / кнопка этикетки _y */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleLabel();
+          }}
+          title={f.is_label ? 'Кадр этикетки (_y). Кликните, чтобы снять' : 'Сделать этот кадр этикеткой (_y)'}
+          className={cx(
+            'absolute bottom-0.5 right-0.5 text-[8.5px] font-mono px-1 py-0.5 rounded transition-all',
+            f.is_label
+              ? 'bg-amber-500/90 text-black font-bold shadow'
+              : 'opacity-0 group-hover:opacity-100 bg-black/75 text-tx-2 hover:text-white hover:bg-black',
+          )}
+        >
+          {f.is_label ? 'y' : '+y'}
+        </button>
+      </div>
+
       {edit ? (
         <input
           autoFocus
@@ -89,31 +109,30 @@ function SortableFrame({
             if (e.key === 'Escape') setEdit(false);
           }}
           onClick={(e) => e.stopPropagation()}
-          maxLength={5}
-          placeholder="_06"
+          maxLength={6}
+          placeholder="_06 / _y"
           className="w-full mt-1 bg-base border border-accent rounded px-1 py-0.5 font-mono text-[10px] text-center outline-none"
         />
       ) : (
         <button
           onClick={(e) => {
             e.stopPropagation();
-            if (f.is_label || isMain) return;
-            setVal(f.suffix_custom ?? '');
+            setVal(f.suffix_custom ?? (f.is_label ? '_y' : ''));
             setEdit(true);
           }}
           title={
             f.is_label
-              ? 'Кадр этикетки: суффикс _y зафиксирован'
+              ? 'Кадр этикетки: суффикс _y. Кликните для редактирования'
               : isMain
-                ? 'Главный ракурс: строго без суффикса'
-                : 'Клик — кастомный суффикс: _06, _com, _pack, _ins, _tag'
+                ? 'Главный ракурс: строго без суффикса. Клик — кастомный суффикс'
+                : 'Клик — кастомный суффикс: _06, _y, _com, _pack, _ins, _tag'
           }
           className={cx(
-            'w-full mt-1 font-mono text-[10px] rounded px-1 py-0.5 tabular-nums',
+            'w-full mt-1 font-mono text-[10px] rounded px-1 py-0.5 tabular-nums transition-colors',
             f.is_label
-              ? 'text-warm bg-warm/10'
+              ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20 font-bold'
               : isMain
-                ? 'text-tx-3 bg-white/5'
+                ? 'text-tx-3 bg-white/5 hover:bg-white/10'
                 : 'text-tx-2 bg-white/5 hover:bg-white/10',
           )}
         >
@@ -134,6 +153,58 @@ function srcLabel(s: string): string {
 }
 
 export default function RightPanel() {
+  const [width, setWidthState] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('rrs_right_panel_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= MIN_RIGHT_WIDTH && val <= MAX_RIGHT_WIDTH) {
+          return val;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_RIGHT_WIDTH;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+
+  const setWidth = (val: number) => {
+    const clamped = Math.max(MIN_RIGHT_WIDTH, Math.min(MAX_RIGHT_WIDTH, val));
+    setWidthState(clamped);
+    try {
+      localStorage.setItem('rrs_right_panel_width', String(clamped));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Ресайзер перетаскиванием (drag) слева
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = window.innerWidth - moveEvent.clientX;
+      setWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, []);
+
   const session = useSession((s) => s.session);
   const activeId = useSession((s) => s.activeId);
   const setActive = useSession((s) => s.setActive);
@@ -141,6 +212,7 @@ export default function RightPanel() {
   const makePlan = useSession((s) => s.makePlan);
   const moveFrame = useSession((s) => s.moveFrame);
   const setSuffix = useSession((s) => s.setSuffix);
+  const toggleLabel = useSession((s) => s.toggleLabel);
   const setLightbox = useSession((s) => s.setLightbox);
   const busy = useSession((s) => s.busy);
   const item = session?.items.find((i) => i.id === activeId) ?? null;
@@ -156,7 +228,23 @@ export default function RightPanel() {
 
   if (!item) {
     return (
-      <aside className="w-[320px] flex-shrink-0 bg-panel border-l border-white/5 flex flex-col min-h-0">
+      <aside
+        ref={panelRef}
+        style={{ width: `${width}px` }}
+        className={cx(
+          'relative flex-shrink-0 bg-panel border-l border-white/5 flex flex-col min-h-0',
+          isResizing ? 'transition-none select-none' : 'transition-[width] duration-75',
+        )}
+      >
+        {/* Интерактивный разделитель слева */}
+        <div
+          onMouseDown={startResizing}
+          title="Перетащите для изменения ширины панели"
+          className={cx(
+            'absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-accent/60 transition-colors',
+            isResizing && 'bg-accent w-1.5',
+          )}
+        />
         <div className="px-4 pt-4 pb-2 text-[11px] font-semibold tracking-[0.08em] uppercase text-tx-3">
           Товар
         </div>
@@ -177,7 +265,24 @@ export default function RightPanel() {
   ];
 
   return (
-    <aside className="w-[320px] flex-shrink-0 bg-panel border-l border-white/5 flex flex-col min-h-0">
+    <aside
+      ref={panelRef}
+      style={{ width: `${width}px` }}
+      className={cx(
+        'relative flex-shrink-0 bg-panel border-l border-white/5 flex flex-col min-h-0',
+        isResizing ? 'transition-none select-none' : 'transition-[width] duration-75',
+      )}
+    >
+      {/* Интерактивный разделитель слева */}
+      <div
+        onMouseDown={startResizing}
+        title="Перетащите для изменения ширины панели"
+        className={cx(
+          'absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-accent/60 transition-colors',
+          isResizing && 'bg-accent w-1.5',
+        )}
+      />
+
       <div className="flex items-center px-4 pt-4 pb-2">
         <span className="text-[11px] font-semibold tracking-[0.08em] uppercase text-tx-3">Товар</span>
         <div className="flex-1" />
@@ -189,6 +294,7 @@ export default function RightPanel() {
           <X size={15} />
         </button>
       </div>
+
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         <div className="relative aspect-[4/3] rounded-[10px] overflow-hidden border border-white/10 bg-[#0F1015] mb-3 shadow-card">
           {hero?.preview && (
@@ -255,15 +361,18 @@ export default function RightPanel() {
           ))}
         </div>
 
-        <div className="text-[10.5px] font-semibold tracking-[0.08em] uppercase text-tx-3 mt-4 mb-2">
-          Кадры · перетащите для порядка
+        <div className="flex items-center justify-between mt-4 mb-2">
+          <div className="text-[10.5px] font-semibold tracking-[0.08em] uppercase text-tx-3">
+            Кадры · перетащите для порядка
+          </div>
         </div>
+
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext
             items={item.frames.map((f) => f.name)}
             strategy={horizontalListSortingStrategy}
           >
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
+            <div className="flex gap-1.5 overflow-x-auto pb-1.5">
               {item.frames.map((f, i) => (
                 <SortableFrame
                   key={f.name}
@@ -271,6 +380,7 @@ export default function RightPanel() {
                   f={f}
                   i={i}
                   onSuffix={(suf) => void setSuffix(item.id, i, suf)}
+                  onToggleLabel={() => void toggleLabel(item.id, i)}
                   onOpen={() =>
                     f.preview &&
                     setLightbox({
@@ -283,8 +393,9 @@ export default function RightPanel() {
             </div>
           </SortableContext>
         </DndContext>
-        <div className="text-[10px] text-tx-3 mt-1.5 leading-relaxed">
-          Порядок: этикетка → <span className="font-mono">_y</span>, главный ракурс — без
+
+        <div className="text-[10px] text-tx-3 mt-1 leading-relaxed">
+          Порядок: этикетка → <span className="font-mono text-amber-400">_y</span> (клик на <span className="font-mono">y</span> на кадре), главный ракурс — без
           суффикса, далее <span className="font-mono">_01, _02…</span>. Клик по номеру —
           кастомный суффикс.
         </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import {
   CalendarDays, FileSpreadsheet, FolderOpen, History,
@@ -22,23 +22,92 @@ const itemCls =
 
 const OFFLINE_TITLE = 'Движок не отвечает — операция недоступна';
 
+const MIN_SIDEBAR_WIDTH = 190;
+const MAX_SIDEBAR_WIDTH = 420;
+const DEFAULT_SIDEBAR_WIDTH = 248;
+
 export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('rrs_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [width, setWidthState] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('rrs_sidebar_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= MIN_SIDEBAR_WIDTH && val <= MAX_SIDEBAR_WIDTH) {
+          return val;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_SIDEBAR_WIDTH;
+  });
+
   const [upload, setUpload] = useState<PickProgress | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+
   const session = useSession((s) => s.session);
   const online = useSession((s) => s.online);
   const busy = useSession((s) => s.busy);
   const undoLast = useSession((s) => s.undoLast);
   const setModal = useSession((s) => s.setModal);
 
+  const setCollapsed = (val: boolean) => {
+    setCollapsedState(val);
+    try {
+      localStorage.setItem('rrs_sidebar_collapsed', String(val));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const setWidth = (val: number) => {
+    const clamped = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, val));
+    setWidthState(clamped);
+    try {
+      localStorage.setItem('rrs_sidebar_width', String(clamped));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Ресайзер перетаскиванием (drag)
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = moveEvent.clientX;
+      setWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, []);
+
   const showJournal = async () => {
-    // BUG-006: когда sidecar онлайн — реальные данные из renamer.journal
     await showJournalSummary();
   };
 
   const newBatch = () => {
-    // BUG-001/BUG-005: Tauri — нативный проводник; браузер — выбор папки
-    // + загрузка RAW в sidecar + открытие сессии
     void pickFolder({
       onProgress: (p) => setUpload(p),
       onDone: () => setUpload(null),
@@ -51,19 +120,80 @@ export default function Sidebar() {
 
   const offCls = !online ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
 
-  // v3.5: свёрнутый вид — узкий рельс с кнопкой разворота (раньше панель
-  // исчезала безвозвратно, вернуть её было нечем).
+  // v3.6: свёрнутый вид — аккуратный док 52px с иконками быстрого доступа
   if (collapsed) {
     return (
-      <aside className="w-[34px] flex-shrink-0 bg-panel border-r border-white/5 flex flex-col min-h-0">
-        <div className="px-2 py-3">
+      <aside className="w-[52px] flex-shrink-0 bg-panel border-r border-white/5 flex flex-col items-center py-2.5 select-none min-h-0">
+        <button
+          onClick={() => setCollapsed(false)}
+          title="Развернуть боковую панель"
+          aria-label="Развернуть боковую панель"
+          className="w-8 h-8 rounded-lg grid place-items-center bg-elevated/70 text-tx-2 hover:bg-elevated hover:text-tx-1 transition-colors"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+
+        <div className="w-6 h-px bg-white/10 my-2.5" />
+
+        <div className="flex flex-col items-center gap-1.5">
           <button
-            onClick={() => setCollapsed(false)}
-            title="Развернуть панель"
-            aria-label="Развернуть панель"
-            className="w-9 h-9 grid place-items-center rounded-md bg-elevated text-tx-2 hover:bg-[#2F333F] hover:text-tx-1 transition-colors"
+            onClick={newBatch}
+            disabled={!online}
+            title={online ? (session?.folder ? `Партия: ${folderName} (${session.items.length} товаров)` : 'Открыть папку…') : OFFLINE_TITLE}
+            className={cx(
+              'w-8 h-8 rounded-lg grid place-items-center transition-colors relative',
+              session?.folder
+                ? 'bg-accent-tint text-accent-text border border-accent/30 hover:bg-accent/25'
+                : 'text-tx-3 hover:bg-surface-hover hover:text-tx-1',
+              offCls,
+            )}
           >
-            <PanelLeftOpen size={16} />
+            <FolderOpen size={16} />
+            {session?.folder && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent" />
+            )}
+          </button>
+
+          <button
+            onClick={() => setModal('zayavka', true)}
+            title="Генератор заявки (PIM)"
+            className="w-8 h-8 rounded-lg grid place-items-center text-tx-3 hover:bg-surface-hover hover:text-accent-text transition-colors"
+          >
+            <FileSpreadsheet size={16} />
+          </button>
+
+          <button
+            onClick={showJournal}
+            disabled={!online}
+            title={online ? 'Журнал операций' : OFFLINE_TITLE}
+            className={cx(
+              'w-8 h-8 rounded-lg grid place-items-center text-tx-3 hover:bg-surface-hover hover:text-tx-1 transition-colors',
+              offCls,
+            )}
+          >
+            <History size={16} />
+          </button>
+
+          <button
+            onClick={() => void undoLast()}
+            disabled={!online}
+            title={online ? 'Отменить последнее переименование (⌘Z)' : OFFLINE_TITLE}
+            className={cx(
+              'w-8 h-8 rounded-lg grid place-items-center text-tx-3 hover:bg-surface-hover hover:text-tx-1 transition-colors',
+              offCls,
+            )}
+          >
+            <Undo2 size={16} />
+          </button>
+        </div>
+
+        <div className="mt-auto flex flex-col items-center">
+          <button
+            onClick={() => setModal('settings', true)}
+            title="Настройки"
+            className="w-8 h-8 rounded-lg grid place-items-center text-tx-3 hover:bg-surface-hover hover:text-tx-1 transition-colors"
+          >
+            <Settings size={16} />
           </button>
         </div>
       </aside>
@@ -72,7 +202,12 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="w-[248px] flex-shrink-0 bg-panel border-r border-white/5 flex flex-col min-h-0 transition-all duration-200 overflow-hidden"
+      ref={sidebarRef}
+      style={{ width: `${width}px` }}
+      className={cx(
+        'relative flex-shrink-0 bg-panel border-r border-white/5 flex flex-col min-h-0 overflow-hidden',
+        isResizing ? 'transition-none select-none' : 'transition-[width] duration-75',
+      )}
     >
       <div className="flex-1 overflow-y-auto px-2.5 py-3">
         <SideLabel>
@@ -155,6 +290,7 @@ export default function Sidebar() {
           Настройки
         </button>
       </div>
+
       <div className="px-3 py-2.5 border-t border-white/5">
         <button
           onClick={() => setCollapsed(true)}
@@ -164,6 +300,16 @@ export default function Sidebar() {
           Свернуть
         </button>
       </div>
+
+      {/* Интерактивный разделитель (ручка изменения ширины) */}
+      <div
+        onMouseDown={startResizing}
+        title="Перетащите для изменения ширины панели"
+        className={cx(
+          'absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-accent/60 transition-colors',
+          isResizing && 'bg-accent w-1.5',
+        )}
+      />
     </aside>
   );
 }

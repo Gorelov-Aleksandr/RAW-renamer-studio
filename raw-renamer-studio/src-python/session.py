@@ -20,8 +20,8 @@ from raw_engine import RAW_EXTS, file_hash
 from scanner import detect
 
 MARKER_RE = re.compile(r'\*(\d{8,13})\.[A-Za-z0-9]+$')
-NAMES_RE = re.compile(r'^(\d{13})(?:_(.*))?$')
-SUFFIX_RE = re.compile(r'^(?:_\d{1,4}|_com|_pack|_ins|_tag)$')
+NAMES_RE = re.compile(r'^(\d{8,14})(?:_(.*))?$')
+SUFFIX_RE = re.compile(r'^(?:_\d{1,4}|_com|_pack|_ins|_tag|_[yу])$')
 
 
 def natural_sort_key(name: str):
@@ -29,14 +29,14 @@ def natural_sort_key(name: str):
     return [int(p) if p.isdigit() else p for p in re.split(r'(\d+)', name)]
 
 
-def _new_item(n: int, barcode: Optional[str], source: str) -> dict:
+def _new_item(n: int, barcode: Optional[str], source: str, lm_code: Optional[str] = None) -> dict:
     return {
         'id': f'it{n:03d}',
         'barcode': barcode,
-        'lm_code': None,
+        'lm_code': lm_code,
         'product_name': None,
         'frames': [],
-        'status': 'err' if not barcode else 'ok',
+        'status': 'err' if (not barcode and not lm_code) else 'ok',
         'is_new': False,
         'source': source,
         'lookup_source': None,
@@ -80,9 +80,10 @@ def scan_folder(folder, mode: str = 'cv',
     items: list[dict] = []
     current: Optional[dict] = None
 
-    def start_item(barcode: Optional[str], source: str, frame: Path, is_label: bool) -> None:
+    def start_item(barcode: Optional[str], source: str, frame: Path, is_label: bool,
+                   lm_code: Optional[str] = None) -> None:
         nonlocal current
-        it = _new_item(len(items) + 1, barcode, source)
+        it = _new_item(len(items) + 1, barcode, source, lm_code=lm_code)
         it['frames'].append(_frame(frame, is_label))
         it['has_label'] = is_label
         items.append(it)
@@ -107,12 +108,19 @@ def scan_folder(folder, mode: str = 'cv',
         if mode == 'names':
             mm = NAMES_RE.match(f.stem)
             if mm:
-                bc, hint = mm.group(1), (mm.group(2) or '').lower()
+                code, hint = mm.group(1), (mm.group(2) or '').lower()
                 # v3.5: «у» (кириллица) — реальная опечатка русской раскладки в
                 # имени файла; считаем этикеткой. Написание в план всегда 'y' (лат).
                 is_label = hint in ('y', 'у')
-                if current is None or current.get('barcode') != bc:
-                    start_item(bc, 'names', f, is_label)
+                is_ean = len(code) == 13
+                bc = code if is_ean else None
+                lm = code if not is_ean else None
+                same = (current is not None and (
+                    (bc and current.get('barcode') == bc) or
+                    (lm and current.get('lm_code') == lm)
+                ))
+                if not same:
+                    start_item(bc, 'names', f, is_label, lm_code=lm)
                 else:
                     attach(f, is_label)
             else:
@@ -139,7 +147,7 @@ def scan_folder(folder, mode: str = 'cv',
             attach(f)
 
     for it in items:
-        if not it['barcode']:
+        if not it['barcode'] and not it['lm_code']:
             it['status'] = 'err'
         elif not it['has_label']:
             it['status'] = 'warn'

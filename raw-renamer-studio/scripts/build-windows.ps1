@@ -46,7 +46,7 @@ python -m venv .build-venv
 & .\.build-venv\Scripts\python.exe -m pip install --quiet -r src-python\requirements.txt pyinstaller
 & .\.build-venv\Scripts\pyinstaller.exe --clean --noconfirm `
     --distpath src-python\dist --workpath src-python\build `
-    src-python\sidecar.spec
+    src-python\raw-renamer-sidecar.spec
 if (-not (Test-Path src-python\dist\raw-renamer-sidecar.exe)) {
     Fail "sidecar не собран: src-python\dist\raw-renamer-sidecar.exe"
 }

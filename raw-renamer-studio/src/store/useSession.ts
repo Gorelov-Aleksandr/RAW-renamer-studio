@@ -27,6 +27,7 @@ interface AppState {
   search: string;
   zoom: number;
   plan: PlanRow[] | null;
+  planItemIds: string[] | null;
   planSkipped: number;
   modals: {
     rename: boolean;
@@ -57,6 +58,7 @@ interface AppState {
   refreshAngles: () => Promise<void>;
   moveFrame: (itemId: string, from: number, to: number) => Promise<void>;
   setSuffix: (itemId: string, idx: number, suffix: string | null) => Promise<void>;
+  toggleLabel: (itemId: string, idx: number) => Promise<void>;
   applyBarcode: (itemId: string, barcode: string) => Promise<void>;
   makePlan: (itemIds?: string[]) => Promise<void>;
   executePlan: () => Promise<void>;
@@ -85,6 +87,7 @@ export const useSession = create<AppState>()((set, get) => ({
   search: '',
   zoom: 100,
   plan: null,
+  planItemIds: null,
   planSkipped: 0,
   modals: { rename: false, barcode: false, zayavka: false, settings: false, help: false, about: false, palette: false },
   lightbox: null,
@@ -130,7 +133,14 @@ export const useSession = create<AppState>()((set, get) => ({
           if (e.stage === 0 || e.stage > cur) set({ bootStage: e.stage });
         }
         if (e.kind === 'ready') {
-          set({ bootStage: 3 });
+          set({ bootStage: 3, engineState: 'online', online: true });
+          void (async () => {
+            try {
+              set({ info: await sc.rpc<SystemInfo>('system.info') });
+            } catch {
+              /* движок не отвечает — баннер offline покажет состояние */
+            }
+          })();
         }
         // 'ready' — уже обработан внутри клиента (baseUrl + online)
       },
@@ -259,7 +269,7 @@ export const useSession = create<AppState>()((set, get) => ({
 
   setSuffix: async (itemId, idx, suffix) => {
     try {
-      const r = await sc.rpc<{ frames: Item['frames'] }>('session.set_frame_suffix', {
+      const r = await sc.rpc<{ frames: Item['frames']; has_label?: boolean; status?: Item['status'] }>('session.set_frame_suffix', {
         item_id: itemId,
         idx,
         suffix: suffix ?? null,
@@ -268,12 +278,44 @@ export const useSession = create<AppState>()((set, get) => ({
         session: s.session
           ? {
               ...s.session,
-              items: s.session.items.map((it) => (it.id === itemId ? { ...it, frames: r.frames } : it)),
+              items: s.session.items.map((it) =>
+                it.id === itemId
+                  ? {
+                      ...it,
+                      frames: r.frames,
+                      has_label: r.has_label !== undefined ? r.has_label : it.has_label,
+                      status: r.status !== undefined ? r.status : it.status,
+                    }
+                  : it,
+              ),
             }
           : s.session,
       }));
     } catch (e) {
       get().toast('err', 'Недопустимый суффикс', errMsg(e));
+    }
+  },
+
+  toggleLabel: async (itemId, idx) => {
+    try {
+      const r = await sc.rpc<{ frames: Item['frames']; has_label: boolean; status: Item['status'] }>(
+        'session.toggle_frame_label',
+        { item_id: itemId, idx },
+      );
+      set((s) => ({
+        session: s.session
+          ? {
+              ...s.session,
+              items: s.session.items.map((it) =>
+                it.id === itemId
+                  ? { ...it, frames: r.frames, has_label: r.has_label, status: r.status }
+                  : it,
+              ),
+            }
+          : s.session,
+      }));
+    } catch (e) {
+      get().toast('err', 'Ошибка изменения этикетки', errMsg(e));
     }
   },
 
@@ -299,7 +341,7 @@ export const useSession = create<AppState>()((set, get) => ({
         get().toast('warn', 'Нечего переименовывать', r.skipped.length ? 'Товары без кода LM пропущены — введите ШК вручную' : undefined);
         return;
       }
-      set({ plan: r.rows, planSkipped: r.skipped.length, modals: { ...get().modals, rename: true } });
+      set({ plan: r.rows, planItemIds: itemIds ?? null, planSkipped: r.skipped.length, modals: { ...get().modals, rename: true } });
     } catch (e) {
       get().toast('err', 'Не удалось построить план', errMsg(e));
     } finally {
@@ -314,10 +356,14 @@ export const useSession = create<AppState>()((set, get) => ({
     try {
       const r = await sc.rpc<{
         renamed: number;
+        items?: Item[];
         xlsx: { updated: number; added: number; locked: boolean; message?: string };
         journal_id: string;
-      }>('renamer.execute', {});
-      set({ modals: { ...st.modals, rename: false }, plan: null, lastExcelTs: Date.now() });
+      }>('renamer.execute', { item_ids: st.planItemIds });
+      if (r.items) {
+        set((s) => ({ session: s.session ? { ...s.session, items: r.items! } : s.session }));
+      }
+      set({ modals: { ...st.modals, rename: false }, plan: null, planItemIds: null, lastExcelTs: Date.now() });
       if (r.xlsx.locked) {
         get().toast('err', 'Excel заблокирован', r.xlsx.message ?? 'Закройте файл в Excel и нажмите «Повторить»', 'Повторить', () => void get().retryXlsx());
       } else {

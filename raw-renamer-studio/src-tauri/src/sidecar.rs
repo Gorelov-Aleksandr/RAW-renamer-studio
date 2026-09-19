@@ -359,55 +359,91 @@ fn dev_command() -> (String, Vec<String>) {
             base.join(".sidecar").join("port").to_string_lossy().into_owned(),
             "--data-dir".into(),
             base.join(".data").to_string_lossy().into_owned(),
-            // v3.3 (D2): 30 с вместо 8 — App Nap / сон Mac гасят JS-таймеры
-            // WebView, heartbeat (каждые 3 с) на время «засыпает»; 8 с давал
-            // ложную смерть движка. 30 с — запас для Nap, но зомби всё равно
-            // убирается (и kill_sidecar при выходе приложения).
+            // v3.3 (D2) / v3.6: 120 с — App Nap / сон Mac гасят JS-таймеры
+            // WebView; 120 с даёт устойчивость, а при выходе приложение убивается нативно.
             "--watchdog".into(),
-            "30".into(),
+            "120".into(),
         ],
     )
 }
 
-/// Release: бинарник PyInstaller из bundle externalBin
-/// (src-tauri/binaries/raw-renamer-sidecar-<target-triple>).
-/// Tauri раскладывает externalBin по-разному в зависимости от ОС
+#[cfg(not(debug_assertions))]
+fn check_candidate_file(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    if p.is_file() {
+        return Some(p.to_path_buf());
+    }
+    if p.is_dir() {
+        let b1 = p.join("raw-renamer-sidecar");
+        if b1.is_file() {
+            return Some(b1);
+        }
+        #[cfg(windows)]
+        {
+            let b2 = p.join("raw-renamer-sidecar.exe");
+            if b2.is_file() {
+                return Some(b2);
+            }
+        }
+    }
+    None
+}
+
+/// Release: бинарник PyInstaller из bundle externalBin или resources
+/// (onedir или onefile, src-tauri/binaries/raw-renamer-sidecar-<target-triple>).
+/// Tauri раскладывает externalBin и resources по-разному в зависимости от ОС
 /// (macOS: Contents/MacOS/binaries, Windows: resources\binaries, …) —
 /// перебираем все разумные каталоги. Возвращает Option — без паник.
 #[cfg(not(debug_assertions))]
 fn find_release_binary<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(rd) = app.path().resource_dir() {
+        candidates.push(rd.join("sidecar"));
         candidates.push(rd.join("binaries"));
+        candidates.push(rd.join("resources").join("sidecar"));
         candidates.push(rd.join("resources").join("binaries"));
+        candidates.push(rd.clone());
         if let Some(parent) = rd.parent() {
+            candidates.push(parent.join("MacOS").join("sidecar"));
             candidates.push(parent.join("MacOS").join("binaries"));
+            candidates.push(parent.join("MacOS"));
+            candidates.push(parent.join("Resources").join("sidecar"));
             candidates.push(parent.join("Resources").join("binaries"));
+            candidates.push(parent.join("Resources"));
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("sidecar"));
             candidates.push(parent.join("binaries"));
+            candidates.push(parent.join("resources").join("sidecar"));
             candidates.push(parent.join("resources").join("binaries"));
             candidates.push(parent.to_path_buf());
         }
     }
-    candidates.iter().find_map(|dir| {
-        std::fs::read_dir(dir)
-            .ok()
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .map(|n| {
-                    let s = n.to_string_lossy();
-                    s == "raw-renamer-sidecar" || s.starts_with("raw-renamer-sidecar-")
-                })
-                    .unwrap_or(false)
-            })
-    })
+
+    for dir in &candidates {
+        // Прямая проверка файлов в каталоге
+        if let Some(f) = check_candidate_file(&dir.join("raw-renamer-sidecar")) {
+            return Some(f);
+        }
+        #[cfg(windows)]
+        if let Some(f) = check_candidate_file(&dir.join("raw-renamer-sidecar.exe")) {
+            return Some(f);
+        }
+
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                if name == "raw-renamer-sidecar" || name.starts_with("raw-renamer-sidecar-") || name == "sidecar" {
+                    if let Some(valid) = check_candidate_file(&p) {
+                        return Some(valid);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(not(debug_assertions))]
@@ -423,9 +459,9 @@ fn build_command<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(String, Vec<S
         vec![
             "--port".into(),
             "0".into(),
-            // v3.3 (D2): 30 с вместо 8 (App Nap — см. dev_command).
+            // v3.6: 120 с вместо 30 (защита от ложной смерти при App Nap).
             "--watchdog".into(),
-            "30".into(),
+            "120".into(),
         ],
     ))
 }
